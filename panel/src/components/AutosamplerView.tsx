@@ -4,21 +4,11 @@ interface Props {
   motors: MotorStatus[];
 }
 
-// Step-to-world-unit mapping (tune to match real travel)
-const RANGE = {
-  LR: { max: 2000, travel: 150 },   // base axis: whole gantry left-right (world X)
-  FB: { max: 2000, travel: 55 },    // on LR: tower shifts forward-back (world Y)
-  UD: { max: 2000, travel: 110 },   // on FB: syringe up-down on tower (world Z)
-  PL: { max: 400, travel: 25 },     // on UD: plunger extends down (world Z)
-};
-
-function scale(pos: number, axis: keyof typeof RANGE): number {
-  const r = RANGE[axis];
-  return (Math.max(0, Math.min(r.max, pos)) / r.max) * r.travel;
-}
+// 1 inch = 10 world units
+const INCH = 10;
 
 // Isometric projection (30° dimetric)
-// World: +X = right, +Y = into screen, +Z = up
+// World: +X = right, +Y = into screen (depth), +Z = up
 const A = Math.PI / 6;
 const CA = Math.cos(A);
 const SA = Math.sin(A);
@@ -34,203 +24,390 @@ function pts(coords: [number, number][]): string {
   return coords.map((c) => c.join(",")).join(" ");
 }
 
+function Foot({ x, y, z, w, d, h, fill, stroke = "#555", sw = 0.8 }: {
+  x: number; y: number; z: number; w: number; d: number; h: number;
+  fill: string; stroke?: string; sw?: number;
+}) {
+  // Half-cylinders on front/back ends (pill shape viewed from above)
+  // Cylinder axis = Z (vertical), radius = w/2
+  const r = w / 2;
+  const N = 10;
+  const cx = x + r;       // center X for both caps
+  const fcY = y + d - r;  // front cap center Y
+  const bcY = y + r;      // back cap center Y
+
+  // Front arc point: θ=0 is right side, θ=π is left side
+  const frontArc = (i: number) => {
+    const θ = (Math.PI * i) / N;
+    return { x: cx + r * Math.cos(θ), y: fcY + r * Math.sin(θ) };
+  };
+
+  // Top face: stadium outline at z+h
+  const topPts: [number, number][] = [];
+  topPts.push(iso(x + w, bcY, z + h));
+  topPts.push(iso(x + w, fcY, z + h));
+  for (let i = 1; i < N; i++) { const p = frontArc(i); topPts.push(iso(p.x, p.y, z + h)); }
+  topPts.push(iso(x, fcY, z + h));
+  topPts.push(iso(x, bcY, z + h));
+  for (let i = 1; i < N; i++) {
+    const θ = (Math.PI * i) / N;
+    topPts.push(iso(cx - r * Math.cos(θ), bcY - r * Math.sin(θ), z + h));
+  }
+
+  // Front curved surface: vertical strips from θ=0 to θ=π
+  const frontStrips = Array.from({ length: N }, (_, i) => {
+    const p = frontArc(i);
+    const q = frontArc(i + 1);
+    const midθ = (Math.PI * (i + 0.5)) / N;
+    // θ=0 (right-facing) ≈ 0.78, θ=π/2 (front-facing) ≈ 0.62
+    const shade = 0.78 - 0.16 * Math.sin(midθ);
+    return (
+      <polygon key={`fc${i}`}
+        points={pts([iso(p.x, p.y, z + h), iso(q.x, q.y, z + h), iso(q.x, q.y, z), iso(p.x, p.y, z)])}
+        fill={darken(fill, shade)} stroke="none" />
+    );
+  });
+
+  // Right face: flat rectangle (straight portion only)
+  const rightPts: [number, number][] = [
+    iso(x + w, bcY, z + h), iso(x + w, fcY, z + h),
+    iso(x + w, fcY, z), iso(x + w, bcY, z),
+  ];
+
+  return (
+    <g>
+      {/* Top face (stadium) */}
+      <polygon points={pts(topPts)}
+        fill={fill} stroke={stroke} strokeWidth={sw} strokeLinejoin="round" />
+      {/* Front curved surface */}
+      {frontStrips}
+      {/* Right face (straight portion) */}
+      <polygon points={pts(rightPts)}
+        fill={darken(fill, 0.78)} stroke={stroke} strokeWidth={sw} strokeLinejoin="round" />
+    </g>
+  );
+}
+
 function Box({ x, y, z, w, d, h, fill, stroke = "#555", sw = 0.8 }: {
   x: number; y: number; z: number; w: number; d: number; h: number;
   fill: string; stroke?: string; sw?: number;
 }) {
   return (
     <g>
+      {/* Top face */}
       <polygon points={pts([iso(x, y, z + h), iso(x + w, y, z + h), iso(x + w, y + d, z + h), iso(x, y + d, z + h)])}
         fill={fill} stroke={stroke} strokeWidth={sw} strokeLinejoin="round" />
+      {/* Right face */}
       <polygon points={pts([iso(x + w, y, z + h), iso(x + w, y + d, z + h), iso(x + w, y + d, z), iso(x + w, y, z)])}
         fill={darken(fill, 0.78)} stroke={stroke} strokeWidth={sw} strokeLinejoin="round" />
+      {/* Front face */}
       <polygon points={pts([iso(x, y + d, z + h), iso(x + w, y + d, z + h), iso(x + w, y + d, z), iso(x, y + d, z)])}
         fill={darken(fill, 0.62)} stroke={stroke} strokeWidth={sw} strokeLinejoin="round" />
     </g>
   );
 }
 
-function Stripe({ x, y, z, w, h, fill, stroke }: {
-  x: number; y: number; z: number; w: number; h: number; fill: string; stroke: string;
-}) {
-  return <polygon points={pts([iso(x, y, z + h), iso(x + w, y, z + h), iso(x + w, y, z), iso(x, y, z)])}
-    fill={fill} stroke={stroke} strokeWidth={0.5} />;
-}
-
-function Vial({ x, y, z, h, r }: { x: number; y: number; z: number; h: number; r: number }) {
-  const N = 6;
-  const topPts: string[] = [];
-  for (let i = 0; i < N; i++) {
-    const a = (i / N) * Math.PI * 2;
-    const [px, py] = iso(x + Math.cos(a) * r, y + Math.sin(a) * r, z + h);
-    topPts.push(`${px},${py}`);
-  }
-  return (
-    <g>
-      {[2, 3, 4].map((i) => {
-        const ni = (i + 1) % N;
-        const a1 = (i / N) * Math.PI * 2, a2 = (ni / N) * Math.PI * 2;
-        return <polygon key={i} points={pts([
-          iso(x + Math.cos(a1) * r, y + Math.sin(a1) * r, z + h),
-          iso(x + Math.cos(a2) * r, y + Math.sin(a2) * r, z + h),
-          iso(x + Math.cos(a2) * r, y + Math.sin(a2) * r, z),
-          iso(x + Math.cos(a1) * r, y + Math.sin(a1) * r, z),
-        ])} fill={i === 3 ? "#2563eb" : "#1d4ed8"} stroke="#1e40af" strokeWidth={0.3} />;
-      })}
-      <polygon points={topPts.join(" ")} fill="#60a5fa" stroke="#3b82f6" strokeWidth={0.3} />
-    </g>
-  );
-}
-
 export function AutosamplerView({ motors }: Props) {
+  const lr = motors.find((m) => m.name === "LR");
   const fb = motors.find((m) => m.name === "FB");
   const ud = motors.find((m) => m.name === "UD");
-  const pl = motors.find((m) => m.name === "PL");
-  const lr = motors.find((m) => m.name === "LR");
+  const syringe = motors.find((m) => m.name === "PL");
 
-  // Kinematic chain: LR (base) → FB → UD → PL
-  const oLR = scale(lr?.position ?? 0, "LR");   // gantry slides right
-  const oFB = scale(fb?.position ?? 0, "FB");    // tower shifts into screen
-  const oUD = scale(ud?.position ?? 0, "UD");    // syringe drops down
-  const oPL = scale(pl?.position ?? 0, "PL");    // plunger extends down
+  // Clamp all axes to [0, 2000]
+  const lrPos = Math.max(0, Math.min(2000, lr?.position ?? 0));
+  const fbPos = Math.max(0, Math.min(2000, fb?.position ?? 0));
+  const udPos = Math.max(0, Math.min(2000, ud?.position ?? 0));
+  const syringePos = Math.max(0, Math.min(2000, syringe?.position ?? 0));
 
-  // ===== FIXED GEOMETRY =====
-  const BASE_Z = 80;
+  // Base: 21" wide, 6" deep, 4" high
+  const baseW = 21 * INCH;
+  const baseD = 6 * INCH;
+  const baseH = 4 * INCH;
 
-  // ===== LR RAIL (fixed on base) =====
-  // Horizontal rail running left-right that the gantry rides on
-  const RAIL_X = -140;
-  const RAIL_Y = 5;
-  const RAIL_W = 220;
+  // Legs: 0.5" wide, 1.75" deep, 9" tall
+  const legW = 0.5 * INCH;
+  const legD = 1.75 * INCH;
+  const legH = 9 * INCH;
 
-  // ===== GANTRY (moves with LR) =====
-  // Tower + arm assembly. LR shifts everything in X.
-  const gantryX = RAIL_X + 10 + oLR;   // LR shifts gantry right
+  // Feet: 2" wide, 20" deep, 0.5" tall (centered under each leg)
+  const footW = 2 * INCH;
+  const footD = 20 * INCH;
+  const footH = 0.5 * INCH;
 
-  // ===== TOWER (moves with LR + FB) =====
-  const towerX = gantryX + 140;         // tower is at right end of arm
-  const towerY = RAIL_Y + 4 + oFB;      // FB shifts tower into screen
-  const towerW = 20;
-  const towerD = 26;
-  const towerH = 180;
+  // Center the base in the viewport, raised by foot + leg height
+  const baseX = -baseW / 2;
+  const baseY = -baseD / 2;
+  const baseZ = footH + legH;
 
-  // ===== ARM (moves with LR + FB, extends left from tower) =====
-  const armX = gantryX;
-  const armY = towerY + 2;
-  const armW = towerX - armX + towerW / 2;
-  const armD = 15;
-  const armH = 15;
-  const armZ = BASE_Z + towerH - 20;    // arm near top of tower
-
-  // ===== SYRINGE CARRIAGE (moves with LR + FB + UD) =====
-  const carriageX = gantryX + 4;
-  const carriageY = armY - 2;
-  const carriageW = 16;
-  const carriageD = 20;
-  const carriageH = 14;
-  const carriageZ = armZ - carriageH - oUD;  // UD drops carriage down
-
-  // ===== SYRINGE (moves with LR + FB + UD) =====
-  const syringeX = carriageX + 4;
-  const syringeY = carriageY + 6;
-  const barrelH = 42;
-  const barrelZ = carriageZ - barrelH;
-  const needleLen = 14;
+  // Head: 2.5" wide, 10.5" deep, 4.5" tall
+  const headW = 2.5 * INCH;
+  const headD = 10.5 * INCH;
+  const headH = 4.5 * INCH;
+  // LR=0: right edge of head = right edge of base
+  // LR=2000: left edge of head = left edge of base
+  // Travel = baseW - headW
+  const headTravel = baseW - headW;
+  const headX = baseX + headTravel - (lrPos / 2000) * headTravel;
+  const fbTravel = 4.25 * INCH; // max forward travel
+  const headY = baseY + (fbPos / 2000) * fbTravel; // FB=0: back-aligned, FB=2000: 4.25" forward
+  const headZ = baseZ + baseH; // sits on top of base
 
   return (
-    <svg viewBox="-240 -310 530 400" className="w-full" style={{ maxHeight: "420px" }}>
-
-      {/* ===== GC INSTRUMENT (fixed, right) ===== */}
-      <Box x={90} y={-20} z={0} w={120} d={100} h={90} fill="#d1d5db" stroke="#9ca3af" />
-      <Box x={90} y={-20} z={90} w={120} d={100} h={4} fill="#4b5563" stroke="#374151" />
-      {/* Injection port */}
-      <Box x={110} y={20} z={94} w={8} d={8} h={14} fill="#1f2937" stroke="#111827" />
-      <Box x={112} y={22} z={108} w={4} d={4} h={3} fill="#374151" stroke="#1f2937" />
-
-      {/* ===== BASE PLATFORM (fixed) ===== */}
-      <Box x={RAIL_X} y={-20} z={BASE_Z - 6} w={230} d={100} h={6} fill="#9ca3af" stroke="#6b7280" />
-
-      {/* ===== LR RAIL (fixed on platform) ===== */}
-      <Box x={RAIL_X + 5} y={RAIL_Y} z={BASE_Z} w={RAIL_W} d={5} h={3} fill="#78716c" stroke="#57534e" sw={0.5} />
-      <Box x={RAIL_X + 5} y={RAIL_Y + 50} z={BASE_Z} w={RAIL_W} d={5} h={3} fill="#78716c" stroke="#57534e" sw={0.5} />
-
-      {/* ===== SAMPLE TRAY (fixed) ===== */}
-      <Box x={-130} y={-10} z={BASE_Z} w={95} d={65} h={4} fill="#e5e7eb" stroke="#9ca3af" />
-      <Box x={-130} y={-10} z={BASE_Z} w={95} d={2} h={14} fill="#d1d5db" stroke="#9ca3af" />
-      <Box x={-130} y={-10} z={BASE_Z} w={2} d={65} h={14} fill="#c4c8cd" stroke="#9ca3af" />
-      {/* Vials */}
-      {Array.from({ length: 8 }).map((_, c) =>
-        Array.from({ length: 5 }).map((_, r) => (
-          <Vial key={`${c}-${r}`} x={-122 + c * 11} y={-3 + r * 11} z={BASE_Z + 4} h={10} r={3.8} />
-        ))
-      )}
-
-      {/* ===== TOWER (moves with LR + FB) ===== */}
-      <Box x={towerX} y={towerY} z={BASE_Z} w={towerW} d={towerD} h={towerH}
-        fill="#d1d5db" stroke="#9ca3af" />
-      {/* Tower rail groove */}
-      <Box x={towerX} y={towerY + 9} z={BASE_Z + 4} w={3} d={6} h={towerH - 12}
-        fill="#6b7280" stroke="#4b5563" />
-      {/* Vents at top */}
-      {[0, 1, 2, 3].map((i) => (
-        <Box key={i} x={towerX + 4 + i * 4} y={towerY} z={BASE_Z + towerH - 20 + i * 4}
-          w={2} d={1} h={8} fill="#b0b5bc" stroke="#9ca3af" sw={0.3} />
-      ))}
-
-      {/* ===== HORIZONTAL ARM (moves with LR + FB) ===== */}
-      <Box x={armX} y={armY} z={armZ} w={armW} d={armD} h={armH}
-        fill="#d1d5db" stroke="#9ca3af" />
-
-      {/* Orange accent stripe on front */}
-      <Stripe x={armX} y={armY + armD} z={armZ + 5} w={armW} h={3}
-        fill="#f97316" stroke="#ea580c" />
-
-      {/* Blue accent near tower */}
-      <Stripe x={armX + armW - 30} y={armY + armD} z={armZ + 9} w={28} h={3}
-        fill="#2563eb" stroke="#1d4ed8" />
-
-      {/* "AS120" text */}
+    <svg viewBox="-220 -300 460 460" className="w-full" style={{ maxHeight: "400px" }}>
+      {/* Feet and legs (drawn first, behind base) */}
       {(() => {
-        const [px, py] = iso(armX + armW - 22, armY + armD, armZ + 10);
-        return <text x={px} y={py} fontSize="5" fill="#f97316" fontFamily="system-ui" fontWeight="700"
-          transform={`rotate(-15, ${px}, ${py})`}>AS120</text>;
+        const fill = "#b5bcc3";
+        const sk = "#9ca3af";
+        const legYCenter = baseY + (baseD - legD) / 2;
+        const leftLegX = baseX + 5 * INCH;
+        const rightLegX = baseX + baseW - 5 * INCH - legW;
+        // Feet centered under each leg in both X and Y
+        const leftFootX = leftLegX + legW / 2 - footW / 2;
+        const rightFootX = rightLegX + legW / 2 - footW / 2;
+        const footYCenter = legYCenter + legD / 2 - footD / 2;
+        return (
+          <>
+            <Foot x={leftFootX} y={footYCenter} z={0} w={footW} d={footD} h={footH}
+              fill={fill} stroke={sk} />
+            <Box x={leftLegX} y={legYCenter} z={footH} w={legW} d={legD} h={legH}
+              fill={fill} stroke={sk} />
+            <Foot x={rightFootX} y={footYCenter} z={0} w={footW} d={footD} h={footH}
+              fill={fill} stroke={sk} />
+            <Box x={rightLegX} y={legYCenter} z={footH} w={legW} d={legD} h={legH}
+              fill={fill} stroke={sk} />
+          </>
+        );
       })()}
 
-      {/* "EST" text on left side of arm */}
+      {/* Base with notch cut from back-top: 3" deep, 1.5" tall */}
       {(() => {
-        const [px, py] = iso(armX + 10, armY + armD, armZ + 10);
-        return <text x={px} y={py} fontSize="6" fill="#2563eb" fontFamily="system-ui" fontWeight="800"
-          transform={`rotate(-15, ${px}, ${py})`}>EST</text>;
+        const fill = "#b5bcc3";
+        const sk = "#9ca3af";
+        const sw = 0.8;
+        const notchD = 3 * INCH; // depth of notch from back edge
+        const notchH = 1.5 * INCH; // height of notch from top
+        const stepZ = baseZ + baseH - notchH; // floor of the notch
+        const stepY = baseY + notchD; // where the step wall is
+        const x = baseX, y = baseY, z = baseZ, w = baseW, d = baseD, h = baseH;
+        return (
+          <g>
+            {/* Back top face (notch floor) */}
+            <polygon points={pts([iso(x, y, stepZ), iso(x + w, y, stepZ), iso(x + w, stepY, stepZ), iso(x, stepY, stepZ)])}
+              fill={fill} stroke={sk} strokeWidth={sw} strokeLinejoin="round" />
+            {/* Inner step wall (vertical face at stepY, facing back) */}
+            <polygon points={pts([iso(x, stepY, z + h), iso(x + w, stepY, z + h), iso(x + w, stepY, stepZ), iso(x, stepY, stepZ)])}
+              fill={darken(fill, 0.7)} stroke={sk} strokeWidth={sw} strokeLinejoin="round" />
+            {/* Front top face */}
+            <polygon points={pts([iso(x, stepY, z + h), iso(x + w, stepY, z + h), iso(x + w, y + d, z + h), iso(x, y + d, z + h)])}
+              fill={fill} stroke={sk} strokeWidth={sw} strokeLinejoin="round" />
+            {/* Right face (L-shaped) */}
+            <polygon points={pts([
+              iso(x + w, y, stepZ),
+              iso(x + w, stepY, stepZ),
+              iso(x + w, stepY, z + h),
+              iso(x + w, y + d, z + h),
+              iso(x + w, y + d, z),
+              iso(x + w, y, z),
+            ])}
+              fill={darken(fill, 0.78)} stroke={sk} strokeWidth={sw} strokeLinejoin="round" />
+            {/* Front face */}
+            <polygon points={pts([iso(x, y + d, z + h), iso(x + w, y + d, z + h), iso(x + w, y + d, z), iso(x, y + d, z)])}
+              fill={darken(fill, 0.62)} stroke={sk} strokeWidth={sw} strokeLinejoin="round" />
+          </g>
+        );
       })()}
 
-      {/* ===== SYRINGE CARRIAGE (moves with LR + FB + UD) ===== */}
-      <Box x={carriageX} y={carriageY} z={carriageZ}
-        w={carriageW} d={carriageD} h={carriageH}
-        fill="#b0b5bc" stroke="#9ca3af" />
-
-      {/* ===== SYRINGE BARREL ===== */}
-      <Box x={syringeX} y={syringeY} z={barrelZ}
-        w={4} d={4} h={barrelH} fill="#e5e7eb" stroke="#9ca3af" sw={0.5} />
-      {/* Plunger handle */}
-      <Box x={syringeX - 1} y={syringeY - 1} z={barrelZ + barrelH}
-        w={6} d={6} h={3} fill="#6b7280" stroke="#4b5563" sw={0.5} />
-      {/* Plunger rod */}
-      <Box x={syringeX + 1} y={syringeY + 1} z={barrelZ - oPL}
-        w={2} d={2} h={oPL + 4} fill="#9ca3af" stroke="#6b7280" sw={0.4} />
-      {/* Needle */}
+      {/* Horizontal stripe on front face: 0.5" thick, 0.5" from bottom */}
       {(() => {
-        const [x1, y1] = iso(syringeX + 2, syringeY + 2, barrelZ - oPL);
-        const [x2, y2] = iso(syringeX + 2, syringeY + 2, barrelZ - oPL - needleLen);
-        return <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="#9ca3af" strokeWidth={1} />;
+        const fy = baseY + baseD; // front face Y
+        const sz = baseZ + 0.5 * INCH; // 0.5" from bottom
+        const sh = 0.5 * INCH; // 0.5" thick
+        return (
+          <polygon
+            points={pts([
+              iso(baseX, fy, sz + sh),
+              iso(baseX + baseW, fy, sz + sh),
+              iso(baseX + baseW, fy, sz),
+              iso(baseX, fy, sz),
+            ])}
+            fill="#fe8403"
+            stroke="#d97006"
+            strokeWidth={0.5}
+          />
+        );
       })()}
 
-      {/* ===== POSITION READOUT ===== */}
-      <g fontSize="7.5" fontFamily="monospace" fill="#71717a">
-        <text x={200} y={-20} textAnchor="end">LR {lr?.position ?? 0}</text>
-        <text x={200} y={-9} textAnchor="end">FB {fb?.position ?? 0}</text>
-        <text x={200} y={2} textAnchor="end">UD {ud?.position ?? 0}</text>
-        <text x={200} y={13} textAnchor="end">PL {pl?.position ?? 0}</text>
-      </g>
+      {/* "AS120" text on front face, right side, just above orange line */}
+      {(() => {
+        const fy = baseY + baseD;
+        const tz = baseZ + 1.25 * INCH; // just above the orange stripe top
+        const tx = baseX + baseW - 5 * INCH; // right side
+        const [p1x, p1y] = iso(tx, fy, tz);
+        const [p2x, p2y] = iso(tx + 4 * INCH, fy, tz);
+        const angle = Math.atan2(p2y - p1y, p2x - p1x) * (180 / Math.PI);
+        return (
+          <text
+            x={p1x} y={p1y}
+            fontSize="8"
+            fill="#0671b5"
+            fontFamily="system-ui, sans-serif"
+            fontWeight="700"
+            transform={`rotate(${angle}, ${p1x}, ${p1y})`}
+          >
+            AS120
+          </text>
+        );
+      })()}
+
+      {/* UD slider (drawn before head so head renders on top where they overlap) */}
+      {(() => {
+        const udW = 1.5 * INCH;
+        const udH = 12.5 * INCH;
+        const udD = 0.125 * INCH; // 1/8"
+        const udTravel = 7.75 * INCH;
+        const udX = headX + (headW - udW) / 2; // centered in head width
+        const udY = headY + headD - 2 * INCH - udD; // front face 2" behind head front
+        const udZ = headZ - (udPos / 2000) * udTravel; // slides down as UD increases
+        // Stepper motor on front of slider
+        const mtrW = 1.4 * INCH;
+        const mtrD = 1.4 * INCH;
+        const mtrH = 2.75 * INCH;
+        const mtrX = udX + (udW - mtrW) / 2; // centered on slider
+        const mtrY = udY + udD; // back edge coplanar with slider front face
+        const mtrZ = udZ + 6.75 * INCH; // 6.75" above slider bottom
+        // Syringe cylinder below stepper motor
+        const cylR = 0.125 * INCH; // 1/4" diameter = 1/8" radius
+        const cylMaxH = 2.75 * INCH;
+        const cylH = (syringePos / 2000) * cylMaxH;
+        const cylCX = udX + udW / 2; // centered on slider width
+        const cylCY = udY + udD + 0.125 * INCH + cylR; // 1/8" from slider front + radius
+        const cylZ = mtrZ - cylH; // extends downward from motor bottom
+        const cylN = 10;
+
+        // Plunger tip below cylinder
+        const tipW = 1 * INCH;
+        const tipD = 0.75 * INCH;
+        const tipH = 0.6 * INCH;
+        const tipX = cylCX - tipW / 2; // centered on cylinder
+        const tipY = udY + udD; // back face coplanar with slider front
+        const tipZ = cylZ - tipH; // top edge = bottom of cylinder
+
+        return (
+          <g>
+            <Box x={udX} y={udY} z={udZ} w={udW} d={udD} h={udH}
+              fill="#8a9199" stroke="#6b7280" />
+            <Box x={tipX} y={tipY} z={tipZ} w={tipW} d={tipD} h={tipH}
+              fill="#1a1a1a" stroke="#333" />
+            {cylH > 0 && (() => {
+              const cylFill = "#c0c0c0";
+              // Cylinder surface strips (front half visible)
+              const strips = Array.from({ length: cylN }, (_, i) => {
+                const θ1 = (Math.PI * i) / cylN;
+                const θ2 = (Math.PI * (i + 1)) / cylN;
+                const x1 = cylCX + cylR * Math.cos(θ1);
+                const y1 = cylCY + cylR * Math.sin(θ1);
+                const x2 = cylCX + cylR * Math.cos(θ2);
+                const y2 = cylCY + cylR * Math.sin(θ2);
+                const midθ = (θ1 + θ2) / 2;
+                const shade = 0.85 - 0.25 * Math.sin(midθ);
+                return (
+                  <polygon key={`cyl${i}`}
+                    points={pts([iso(x1, y1, cylZ + cylH), iso(x2, y2, cylZ + cylH), iso(x2, y2, cylZ), iso(x1, y1, cylZ)])}
+                    fill={darken(cylFill, shade)} stroke="none" />
+                );
+              });
+              // Top ellipse
+              const topPts: [number, number][] = [];
+              for (let i = 0; i <= cylN * 2; i++) {
+                const θ = (Math.PI * 2 * i) / (cylN * 2);
+                topPts.push(iso(cylCX + cylR * Math.cos(θ), cylCY + cylR * Math.sin(θ), cylZ + cylH));
+              }
+              return (
+                <g>
+                  {strips}
+                  <polygon points={pts(topPts)} fill={cylFill} stroke="#999" strokeWidth={0.4} />
+                </g>
+              );
+            })()}
+            <Box x={mtrX} y={mtrY} z={mtrZ} w={mtrW} d={mtrD} h={mtrH}
+              fill="#1a1a1a" stroke="#333" />
+          </g>
+        );
+      })()}
+
+      {/* Head: lower box + upper tower, front-aligned */}
+      {(() => {
+        const fill = "#b5bcc3";
+        const sk = "#9ca3af";
+        const sw = 0.8;
+        const x = headX, y = headY, w = headW, d = headD, z = headZ, h = headH;
+        const towerD = 4.5 * INCH;
+        const towerH = 8 * INCH;
+        const towerY = y + d - towerD; // back edge of tower (front-aligned)
+        const towerTopZ = z + h + towerH; // top of tower
+        return (
+          <g>
+            {/* Back top face (top of lower part, exposed) */}
+            <polygon points={pts([iso(x, y, z + h), iso(x + w, y, z + h), iso(x + w, towerY, z + h), iso(x, towerY, z + h)])}
+              fill={fill} stroke={sk} strokeWidth={sw} strokeLinejoin="round" />
+            {/* Inner step wall */}
+            <polygon points={pts([iso(x, towerY, towerTopZ), iso(x + w, towerY, towerTopZ), iso(x + w, towerY, z + h), iso(x, towerY, z + h)])}
+              fill={darken(fill, 0.7)} stroke={sk} strokeWidth={sw} strokeLinejoin="round" />
+            {/* Upper top face */}
+            <polygon points={pts([iso(x, towerY, towerTopZ), iso(x + w, towerY, towerTopZ), iso(x + w, y + d, towerTopZ), iso(x, y + d, towerTopZ)])}
+              fill={fill} stroke={sk} strokeWidth={sw} strokeLinejoin="round" />
+            {/* Right face (L-shaped) */}
+            <polygon points={pts([
+              iso(x + w, y, z + h),
+              iso(x + w, towerY, z + h),
+              iso(x + w, towerY, towerTopZ),
+              iso(x + w, y + d, towerTopZ),
+              iso(x + w, y + d, z),
+              iso(x + w, y, z),
+            ])}
+              fill={darken(fill, 0.78)} stroke={sk} strokeWidth={sw} strokeLinejoin="round" />
+            {/* Front face (full height) */}
+            <polygon points={pts([iso(x, y + d, towerTopZ), iso(x + w, y + d, towerTopZ), iso(x + w, y + d, z), iso(x, y + d, z)])}
+              fill={darken(fill, 0.62)} stroke={sk} strokeWidth={sw} strokeLinejoin="round" />
+            {/* Transparent window on front face: 1.5" wide, 3.25" tall, 1" up, flush right */}
+            {(() => {
+              const winW = 1.5 * INCH;
+              const winH = 3.25 * INCH;
+              const winZ = z + 1 * INCH; // 1" above head bottom
+              const winX = x + w - winW; // flush with right edge
+              const fy = y + d; // front face Y
+              const winD = 1.5 * INCH; // depth of right face window
+              const winY = fy - winD; // 1.5" back from front edge
+              return (
+                <>
+                  {/* Front face window */}
+                  <polygon
+                    points={pts([
+                      iso(winX, fy, winZ + winH),
+                      iso(winX + winW, fy, winZ + winH),
+                      iso(winX + winW, fy, winZ),
+                      iso(winX, fy, winZ),
+                    ])}
+                    fill="#1a3a5c" fillOpacity={0.45}
+                    stroke="#4a7a9c" strokeWidth={0.6} strokeLinejoin="round"
+                  />
+                  {/* Right face window (connects at corner) */}
+                  <polygon
+                    points={pts([
+                      iso(x + w, winY, winZ + winH),
+                      iso(x + w, fy, winZ + winH),
+                      iso(x + w, fy, winZ),
+                      iso(x + w, winY, winZ),
+                    ])}
+                    fill="#1a3a5c" fillOpacity={0.35}
+                    stroke="#4a7a9c" strokeWidth={0.6} strokeLinejoin="round"
+                  />
+                </>
+              );
+            })()}
+          </g>
+        );
+      })()}
     </svg>
   );
 }

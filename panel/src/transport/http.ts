@@ -122,7 +122,7 @@ export class HttpTransport implements Transport {
           })
         );
       }
-    }, 500);
+    }, 200);
   }
 
   private stopPolling(): void {
