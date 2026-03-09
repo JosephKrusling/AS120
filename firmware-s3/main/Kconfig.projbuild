@@ -1,0 +1,11 @@
+menu "AS120 Configuration"
+    config SIMULATE_I2C
+        bool "Simulate I2C devices (no PCB required)"
+        default n
+        help
+            When enabled, all I2C communication is simulated.
+            The TCA9535 GPIO expanders and DAC7574 DACs will not
+            be accessed on the I2C bus, and home switch inputs
+            will be simulated. This allows running the firmware
+            on a bare ESP32-S3 devkit without the PCB attached.
+endmenu

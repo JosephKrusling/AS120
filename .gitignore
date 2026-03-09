@@ -1,0 +1,28 @@
+# OS
+.DS_Store
+
+# Node
+node_modules/
+dist/
+*.local
+*.tsbuildinfo
+
+# Logs
+*.log
+npm-debug.log*
+
+# ESP-IDF
+build/
+sdkconfig.old
+sdkconfig.old.*
+
+# PlatformIO
+.pio/
+
+# IDE
+.vscode/
+.idea/
+*.sw?
+
+# Playwright
+.playwright-mcp/

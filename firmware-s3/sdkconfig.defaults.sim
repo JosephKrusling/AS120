@@ -1,0 +1,2 @@
+# Simulation mode — run without PCB hardware
+CONFIG_SIMULATE_I2C=y

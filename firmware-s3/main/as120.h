@@ -1,0 +1,105 @@
+#pragma once
+
+#include <stdint.h>
+#include <stdbool.h>
+#include <driver/gpio.h>
+#include <driver/uart.h>
+#include <driver/gptimer_types.h>
+#include "constants.h"
+#include "stepper.h"
+#include "drivers/dac7574.h"
+#include "drivers/tca9535.h"
+
+// === Motor indices
+typedef enum {
+    MOTOR_FORWARD_BACK = 0,
+    MOTOR_UP_DOWN      = 1,
+    MOTOR_PLUNGER      = 2,
+    MOTOR_RIGHT_LEFT   = 3,
+    MOTOR_COUNT        = 4,
+} motor_id_t;
+
+// === Input modes
+typedef enum {
+    INPUT_MODE_4BYTE            = 0,
+    INPUT_MODE_LUA              = 1,
+    INPUT_MODE_SYSTEM_PARAM_BLOB = 2,
+    INPUT_MODE_METHOD_PARAM_BLOB = 3,
+} input_mode_t;
+
+// === Action types
+typedef enum {
+    ACTION_ABSOLUTE,
+    ACTION_INCREMENT,
+    ACTION_DECREMENT,
+} action_type_t;
+
+// A queued motor movement.
+typedef struct action {
+    action_type_t type;
+    uint8_t motor_idx;
+    uint8_t send_ok_on_completion;
+    int64_t target;
+    struct action *next;
+} action_t;
+
+// Stored 3-axis position (for coordinate save/recall).
+typedef struct {
+    int64_t forward_back;
+    int64_t up_down;
+    int64_t right_left;
+} position_t;
+
+// Per-motor hardware + state.
+typedef struct {
+    char name[16];
+    uint8_t index;
+    gpio_num_t pin_step;
+    gpio_num_t pin_dir;
+    gpio_num_t pin_home;
+    dac7574_t *dac;
+    uint8_t dac_channel;
+    tca9535_t *gpio;
+    uint8_t gpio_pin_drv_nflt;
+    uint8_t gpio_pin_drv_en;
+    uint8_t gpio_pin_drv_m0;
+    uint8_t gpio_pin_drv_m1;
+    uint8_t gpio_pin_disabled;
+    bool invert_step_dir;
+    stepper_t stepper;
+    bool home_switch;
+    bool is_home;
+    uint8_t cycles_in_switch;
+} motor_t;
+
+// Top-level device state.
+typedef struct {
+    motor_t motors[MOTOR_COUNT];
+    int8_t active_motor_index;
+    tca9535_t gpio_main;
+    tca9535_t gpio_expansion;
+    dac7574_t dac_main;
+    dac7574_t dac_expansion;
+    uart_port_t uart_num;
+    fault_code_t fault_code;
+    bool enable_motor_interrupt;
+    uint8_t method_page_number;
+    input_mode_t input_mode;
+
+    // Action queue (singly-linked list)
+    action_t *current_action;
+    action_t *next_action;
+    action_t *last_action;
+} as120_t;
+
+// The single global device instance (defined in as120.c).
+extern as120_t g_as120;
+
+void as120_enqueue_action(as120_t *dev, action_t action);
+void as120_process_next_action(as120_t *dev);
+void as120_handle_command(as120_t *dev, uint8_t command[4]);
+void as120_set_fault(as120_t *dev, fault_code_t code);
+bool stepper_interrupt_handler(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_data);
+
+// Generates JSON status string into provided buffer. Returns length written.
+int as120_get_status_json(const as120_t *dev, char *buf, size_t buf_size);
