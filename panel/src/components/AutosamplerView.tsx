@@ -1,7 +1,33 @@
+import { useRef, useCallback, useState, useEffect } from "react";
 import type { MotorStatus } from "@/transport/types";
 
 interface Props {
   motors: MotorStatus[];
+}
+
+function useSmoothValue(target: number, smoothing = 0.15): number {
+  const current = useRef(target);
+  const [value, setValue] = useState(target);
+  const rafId = useRef(0);
+
+  const animate = useCallback(() => {
+    const diff = target - current.current;
+    if (Math.abs(diff) < 0.5) {
+      current.current = target;
+      setValue(target);
+      return;
+    }
+    current.current += diff * smoothing;
+    setValue(current.current);
+    rafId.current = requestAnimationFrame(animate);
+  }, [target, smoothing]);
+
+  useEffect(() => {
+    rafId.current = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(rafId.current);
+  }, [animate]);
+
+  return value;
 }
 
 // 1 inch = 10 world units
@@ -22,6 +48,10 @@ function darken(hex: string, f: number): string {
 
 function pts(coords: [number, number][]): string {
   return coords.map((c) => c.join(",")).join(" ");
+}
+
+function pathD(coords: [number, number][]): string {
+  return coords.map((c, i) => `${i === 0 ? "M" : "L"}${c[0]},${c[1]}`).join(" ") + " Z";
 }
 
 function Foot({ x, y, z, w, d, h, fill, stroke = "#555", sw = 0.8 }: {
@@ -113,11 +143,11 @@ export function AutosamplerView({ motors }: Props) {
   const ud = motors.find((m) => m.name === "UD");
   const syringe = motors.find((m) => m.name === "PL");
 
-  // Clamp all axes to [0, 2000]
-  const lrPos = Math.max(0, Math.min(2000, lr?.position ?? 0));
-  const fbPos = Math.max(0, Math.min(2000, fb?.position ?? 0));
-  const udPos = Math.max(0, Math.min(2000, ud?.position ?? 0));
-  const syringePos = Math.max(0, Math.min(2000, syringe?.position ?? 0));
+  // Clamp all axes to [0, 2000] then smooth
+  const lrPos = useSmoothValue(Math.max(0, Math.min(2000, lr?.position ?? 0)));
+  const fbPos = useSmoothValue(Math.max(0, Math.min(2000, fb?.position ?? 0)));
+  const udPos = useSmoothValue(Math.max(0, Math.min(2000, ud?.position ?? 0)));
+  const syringePos = useSmoothValue(Math.max(0, Math.min(2000, syringe?.position ?? 0)));
 
   // Base: 21" wide, 6" deep, 4" high
   const baseW = 21 * INCH;
@@ -153,7 +183,7 @@ export function AutosamplerView({ motors }: Props) {
   const headZ = baseZ + baseH; // sits on top of base
 
   return (
-    <svg viewBox="-220 -300 460 460" className="w-full" style={{ maxHeight: "400px" }}>
+    <svg viewBox="-180 -260 340 340" className="w-full" style={{ maxHeight: "400px" }}>
       {/* Feet and legs (drawn first, behind base) */}
       {(() => {
         const fill = "#b5bcc3";
@@ -209,7 +239,7 @@ export function AutosamplerView({ motors }: Props) {
               iso(x + w, y + d, z),
               iso(x + w, y, z),
             ])}
-              fill={darken(fill, 0.78)} stroke={sk} strokeWidth={sw} strokeLinejoin="round" />
+              fill="#266eba" stroke={sk} strokeWidth={sw} strokeLinejoin="round" />
             {/* Front face */}
             <polygon points={pts([iso(x, y + d, z + h), iso(x + w, y + d, z + h), iso(x + w, y + d, z), iso(x, y + d, z)])}
               fill={darken(fill, 0.62)} stroke={sk} strokeWidth={sw} strokeLinejoin="round" />
@@ -356,52 +386,54 @@ export function AutosamplerView({ motors }: Props) {
             {/* Upper top face */}
             <polygon points={pts([iso(x, towerY, towerTopZ), iso(x + w, towerY, towerTopZ), iso(x + w, y + d, towerTopZ), iso(x, y + d, towerTopZ)])}
               fill={fill} stroke={sk} strokeWidth={sw} strokeLinejoin="round" />
-            {/* Right face (L-shaped) */}
-            <polygon points={pts([
-              iso(x + w, y, z + h),
-              iso(x + w, towerY, z + h),
-              iso(x + w, towerY, towerTopZ),
-              iso(x + w, y + d, towerTopZ),
-              iso(x + w, y + d, z),
-              iso(x + w, y, z),
-            ])}
-              fill={darken(fill, 0.78)} stroke={sk} strokeWidth={sw} strokeLinejoin="round" />
-            {/* Front face (full height) */}
-            <polygon points={pts([iso(x, y + d, towerTopZ), iso(x + w, y + d, towerTopZ), iso(x + w, y + d, z), iso(x, y + d, z)])}
-              fill={darken(fill, 0.62)} stroke={sk} strokeWidth={sw} strokeLinejoin="round" />
-            {/* Transparent window on front face: 1.5" wide, 3.25" tall, 1" up, flush right */}
+            {/* Windows: 1.5" wide, 3.25" tall, 1" above head bottom, flush right + front */}
             {(() => {
               const winW = 1.5 * INCH;
               const winH = 3.25 * INCH;
-              const winZ = z + 1 * INCH; // 1" above head bottom
-              const winX = x + w - winW; // flush with right edge
-              const fy = y + d; // front face Y
-              const winD = 1.5 * INCH; // depth of right face window
-              const winY = fy - winD; // 1.5" back from front edge
+              const winZ = z + 1 * INCH;
+              const winX = x + w - winW;
+              const fy = y + d;
+              const winD = 1.5 * INCH;
+              const winY = fy - winD;
+
+              // Right face (L-shaped with window cutout)
+              const rightOuter = [
+                iso(x + w, y, z + h), iso(x + w, towerY, z + h),
+                iso(x + w, towerY, towerTopZ), iso(x + w, y + d, towerTopZ),
+                iso(x + w, y + d, z), iso(x + w, y, z),
+              ];
+              const rightHole = [
+                iso(x + w, winY, winZ + winH), iso(x + w, fy, winZ + winH),
+                iso(x + w, fy, winZ), iso(x + w, winY, winZ),
+              ];
+
+              // Front face (full height with window cutout)
+              const frontOuter = [
+                iso(x, fy, towerTopZ), iso(x + w, fy, towerTopZ),
+                iso(x + w, fy, z), iso(x, fy, z),
+              ];
+              const frontHole = [
+                iso(winX, fy, winZ + winH), iso(winX + winW, fy, winZ + winH),
+                iso(winX + winW, fy, winZ), iso(winX, fy, winZ),
+              ];
+
               return (
                 <>
-                  {/* Front face window */}
-                  <polygon
-                    points={pts([
-                      iso(winX, fy, winZ + winH),
-                      iso(winX + winW, fy, winZ + winH),
-                      iso(winX + winW, fy, winZ),
-                      iso(winX, fy, winZ),
-                    ])}
-                    fill="#1a3a5c" fillOpacity={0.45}
-                    stroke="#4a7a9c" strokeWidth={0.6} strokeLinejoin="round"
-                  />
-                  {/* Right face window (connects at corner) */}
-                  <polygon
-                    points={pts([
-                      iso(x + w, winY, winZ + winH),
-                      iso(x + w, fy, winZ + winH),
-                      iso(x + w, fy, winZ),
-                      iso(x + w, winY, winZ),
-                    ])}
-                    fill="#1a3a5c" fillOpacity={0.35}
-                    stroke="#4a7a9c" strokeWidth={0.6} strokeLinejoin="round"
-                  />
+                  {/* Right face with cutout */}
+                  <path d={pathD(rightOuter) + " " + pathD(rightHole)}
+                    fillRule="evenodd" fill={darken(fill, 0.78)}
+                    stroke={sk} strokeWidth={sw} strokeLinejoin="round" />
+                  {/* Front face with cutout */}
+                  <path d={pathD(frontOuter) + " " + pathD(frontHole)}
+                    fillRule="evenodd" fill={darken(fill, 0.62)}
+                    stroke={sk} strokeWidth={sw} strokeLinejoin="round" />
+                  {/* Glass overlays */}
+                  <polygon points={pts(frontHole)}
+                    fill="#1a3a5c" fillOpacity={0.3}
+                    stroke="#4a7a9c" strokeWidth={0.6} strokeLinejoin="round" />
+                  <polygon points={pts(rightHole)}
+                    fill="#1a3a5c" fillOpacity={0.2}
+                    stroke="#4a7a9c" strokeWidth={0.6} strokeLinejoin="round" />
                 </>
               );
             })()}

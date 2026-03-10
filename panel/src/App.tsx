@@ -3,7 +3,6 @@ import { useAS120 } from "@/hooks/useAS120";
 import { MotorCard } from "@/components/MotorCard";
 import { SystemInfo } from "@/components/SystemInfo";
 import { DebugConsole } from "@/components/DebugConsole";
-import { TopologyView } from "@/components/TopologyView";
 import { AutosamplerView } from "@/components/AutosamplerView";
 import { BleSetupWizard } from "@/components/BleSetupWizard";
 import { Badge } from "@/components/ui/badge";
@@ -11,16 +10,14 @@ import { Button } from "@/components/ui/button";
 import {
   Wifi,
   Bluetooth,
-  Unplug,
   AlertTriangle,
   Loader2,
   Plug,
   ArrowRight,
   Radio,
-  Network,
-  ChevronDown,
+  Home,
 } from "lucide-react";
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 
 type AppMode = "choose" | "wifi" | "ble-setup";
 
@@ -90,7 +87,34 @@ function WifiDashboard({ onBack, showBack = true }: { onBack: () => void; showBa
     error,
     connect,
     disconnect,
+    homeAll,
   } = useAS120();
+
+  const [homing, setHoming] = useState(false);
+  const homingUpdates = useRef(0);
+  const handleHomeAll = useCallback(async () => {
+    setHoming(true);
+    homingUpdates.current = 0;
+    await homeAll();
+  }, [homeAll]);
+
+  // Clear homing state: wait a few status updates so the firmware has time
+  // to start moving, then clear once all motors report homed or at position 0.
+  useEffect(() => {
+    if (!homing || !status || status.motors.length === 0) return;
+    homingUpdates.current++;
+    // Skip the first 3 updates (~600ms at 5Hz) to let motors start moving
+    if (homingUpdates.current < 3) return;
+    if (status.motors.every((m) => m.is_home || m.position === 0)) {
+      setHoming(false);
+    }
+  }, [homing, status]);
+
+  useEffect(() => {
+    if (!homing) return;
+    const timeout = setTimeout(() => setHoming(false), 15000);
+    return () => clearTimeout(timeout);
+  }, [homing]);
 
   const faultActive = status && status.fault_code !== 0;
 
@@ -244,16 +268,10 @@ function WifiDashboard({ onBack, showBack = true }: { onBack: () => void; showBa
               </Badge>
             )}
           </div>
-          <div className="flex items-center gap-2">
-            <Badge variant="outline" className="gap-1.5">
-              <Wifi className="h-3 w-3 text-green-400" />
-              {status?.wifi?.ssid || "WiFi"}
-            </Badge>
-            <Button variant="outline" size="sm" onClick={() => { disconnect(); onBack(); }}>
-              <Unplug className="mr-1.5 h-3.5 w-3.5" />
-              Disconnect
-            </Button>
-          </div>
+          <Badge variant="outline" className="gap-1.5">
+            <Wifi className="h-3 w-3 text-green-400" />
+            {status?.wifi?.ssid || "WiFi"}
+          </Badge>
         </div>
       </header>
 
@@ -278,26 +296,32 @@ function WifiDashboard({ onBack, showBack = true }: { onBack: () => void; showBa
       <main className="flex-1">
         {status && status.motors.length > 0 && (
           <div className="mx-auto max-w-6xl space-y-6 p-4">
-            <div className="rounded-xl border border-border bg-card p-4">
-              <AutosamplerView motors={status.motors} />
+            <div className="grid gap-4 lg:grid-cols-2">
+              <div className="relative rounded-xl border border-border bg-card p-4">
+                <AutosamplerView motors={status.motors} />
+                <Button
+                  variant="outline"
+                  className={`absolute top-2 right-2 bg-card/80 backdrop-blur-sm transition-all duration-300 ${homing ? "h-8 px-3 gap-1.5" : "h-8 w-8 p-0"}`}
+                  onClick={handleHomeAll}
+                  disabled={homing}
+                  title="Home All Motors"
+                >
+                  <div className="relative h-4 w-4 shrink-0">
+                    <Home className={`h-4 w-4 absolute inset-0 transition-all duration-300 ${homing ? "opacity-0 scale-50" : "opacity-100 scale-100"}`} />
+                    <Loader2 className={`h-4 w-4 absolute inset-0 transition-all duration-300 ${homing ? "opacity-100 scale-100 animate-spin [animation-duration:2s]" : "opacity-0 scale-50"}`} />
+                  </div>
+                  <span className={`text-xs font-medium overflow-hidden transition-all duration-300 ${homing ? "max-w-20 opacity-100" : "max-w-0 opacity-0"}`}>
+                    Homing...
+                  </span>
+                </Button>
+              </div>
+              <div className="flex flex-col gap-4">
+                {status.motors.map((motor) => (
+                  <MotorCard key={motor.index} motor={motor} />
+                ))}
+              </div>
             </div>
             <SystemInfo />
-            <div className="grid gap-4 sm:grid-cols-2">
-              {status.motors.map((motor) => (
-                <MotorCard key={motor.index} motor={motor} />
-              ))}
-            </div>
-            {/* Topology */}
-            <details className="group rounded-xl border border-border bg-card">
-              <summary className="flex cursor-pointer items-center gap-2 px-4 py-3 text-sm font-medium text-muted-foreground hover:text-foreground">
-                <Network className="h-4 w-4" />
-                System Topology
-                <ChevronDown className="ml-auto h-4 w-4 transition-transform group-open:rotate-180" />
-              </summary>
-              <div className="border-t border-border p-4">
-                <TopologyView />
-              </div>
-            </details>
             <DebugConsole />
           </div>
         )}

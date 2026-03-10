@@ -1,17 +1,14 @@
 import { useState, useCallback } from "react";
 import { useAS120 } from "@/hooks/useAS120";
 import type { MotorStatus } from "@/transport/types";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
 import { Slider } from "@/components/ui/slider";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import {
   Home,
-  ChevronDown,
-  ChevronUp,
   ArrowRight,
   Settings,
 } from "lucide-react";
@@ -82,164 +79,127 @@ export function MotorCard({ motor }: MotorCardProps) {
 
   return (
     <Card>
-      <CardHeader className="pb-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <CardTitle className="text-base">
-              {motor.name}
-            </CardTitle>
-            <span className="text-xs text-muted-foreground">
-              {MOTOR_LABELS[motor.name] ?? `Motor ${motor.index}`}
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            {motor.is_home ? (
-              <Badge
-                variant="outline"
-                className="border-green-500/30 text-green-400 text-xs"
-              >
-                Homed
-              </Badge>
-            ) : (
-              <Badge
-                variant="outline"
-                className="border-yellow-500/30 text-yellow-400 text-xs"
-              >
-                Not Homed
-              </Badge>
-            )}
-          </div>
-        </div>
-      </CardHeader>
-
-      <CardContent className="space-y-4">
-        {/* Position display */}
-        <div className="flex items-baseline gap-2">
-          <span className="font-mono text-3xl font-bold tabular-nums">
+      <CardContent className="space-y-2 px-3 py-2">
+        {/* Label, position, input, go, home — all one row */}
+        <div className="flex items-center gap-1.5">
+          <span className="text-sm font-bold shrink-0 w-6">{motor.name}</span>
+          <span className="text-[11px] text-muted-foreground shrink-0">=</span>
+          <span className="font-mono text-lg font-bold tabular-nums shrink-0 w-16">
             {motor.position}
           </span>
-          <span className="text-sm text-muted-foreground">steps</span>
-        </div>
-
-        {/* Absolute position + Go */}
-        <div className="flex gap-2">
+          <span className="ml-auto" />
           <Input
             type="number"
-            placeholder="Position"
+            placeholder="Go to position"
             value={targetPosition}
             onChange={(e) => setTargetPosition(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleGo()}
-            className="font-mono"
+            className="font-mono h-7 text-xs w-36 shrink-0"
           />
           <Button
             variant="secondary"
+            size="sm"
+            className="h-7 text-xs px-2 shrink-0"
             onClick={handleGo}
             disabled={targetPosition === ""}
           >
-            <ArrowRight className="mr-1 h-4 w-4" />
+            <ArrowRight className="mr-1 h-3 w-3" />
             Go
           </Button>
-          <Button variant="outline" size="icon" onClick={handleHome} title="Home">
-            <Home className="h-4 w-4" />
+          <Button
+            variant="outline"
+            size="icon"
+            className="h-7 w-7 shrink-0"
+            onClick={() => setSettingsOpen(!settingsOpen)}
+            title="Settings"
+          >
+            <Settings className="h-3 w-3" />
           </Button>
         </div>
 
-        {/* Jog buttons */}
-        <div className="grid grid-cols-6 gap-1">
-          {jogButtons.map((steps) => (
+        {/* Jog buttons with home button between -1 and +1 */}
+        <div className="grid grid-cols-7 gap-1">
+          {[-100, -10, -1].map((steps) => (
             <Button
               key={steps}
               variant="outline"
               size="sm"
-              className="font-mono text-xs"
+              className="font-mono text-[10px] h-6 px-1"
               onClick={() => handleJog(steps)}
             >
-              {steps > 0 ? `+${steps}` : steps}
+              {steps}
+            </Button>
+          ))}
+          <Button
+            variant="outline"
+            size="sm"
+            className={`h-6 px-1 ${motor.is_home ? "text-green-400 border-green-500/30" : "text-yellow-400 border-yellow-500/30"}`}
+            onClick={handleHome}
+            title="Home"
+          >
+            <Home className="h-3 w-3" />
+          </Button>
+          {[1, 10, 100].map((steps) => (
+            <Button
+              key={steps}
+              variant="outline"
+              size="sm"
+              className="font-mono text-[10px] h-6 px-1"
+              onClick={() => handleJog(steps)}
+            >
+              +{steps}
             </Button>
           ))}
         </div>
 
-        {/* Settings toggle */}
-        <button
-          onClick={() => setSettingsOpen(!settingsOpen)}
-          className="flex w-full items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
-        >
-          <Settings className="h-3 w-3" />
-          Settings
-          {settingsOpen ? (
-            <ChevronUp className="ml-auto h-3 w-3" />
-          ) : (
-            <ChevronDown className="ml-auto h-3 w-3" />
-          )}
-        </button>
+      </CardContent>
 
-        {/* Settings panel */}
-        {settingsOpen && (
-          <div className="space-y-4 rounded-lg border border-border bg-background p-3">
+      {/* Settings modal */}
+      {settingsOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/50" onClick={() => setSettingsOpen(false)} />
+          <div className="relative z-10 w-full max-w-sm space-y-4 rounded-xl border border-border bg-card p-4 shadow-lg">
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-semibold">{motor.name} Settings</span>
+              <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setSettingsOpen(false)}>
+                &times;
+              </Button>
+            </div>
+
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <Label className="text-xs">Speed Min</Label>
-                <span className="font-mono text-xs text-muted-foreground">
-                  {config.speed_min}
-                </span>
+                <span className="font-mono text-xs text-muted-foreground">{config.speed_min}</span>
               </div>
-              <Slider
-                min={0}
-                max={10000}
-                step={100}
-                value={config.speed_min}
-                onValueChange={(v) => handleConfigChange("speed_min", v)}
-              />
+              <Slider min={0} max={10000} step={100} value={config.speed_min}
+                onValueChange={(v) => handleConfigChange("speed_min", v)} />
             </div>
 
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <Label className="text-xs">Speed Max</Label>
-                <span className="font-mono text-xs text-muted-foreground">
-                  {config.speed_max}
-                </span>
+                <span className="font-mono text-xs text-muted-foreground">{config.speed_max}</span>
               </div>
-              <Slider
-                min={0}
-                max={20000}
-                step={100}
-                value={config.speed_max}
-                onValueChange={(v) => handleConfigChange("speed_max", v)}
-              />
+              <Slider min={0} max={20000} step={100} value={config.speed_max}
+                onValueChange={(v) => handleConfigChange("speed_max", v)} />
             </div>
 
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <Label className="text-xs">Max Acceleration</Label>
-                <span className="font-mono text-xs text-muted-foreground">
-                  {config.max_acceleration}
-                </span>
+                <span className="font-mono text-xs text-muted-foreground">{config.max_acceleration}</span>
               </div>
-              <Slider
-                min={0}
-                max={50000}
-                step={500}
-                value={config.max_acceleration}
-                onValueChange={(v) =>
-                  handleConfigChange("max_acceleration", v)
-                }
-              />
+              <Slider min={0} max={50000} step={500} value={config.max_acceleration}
+                onValueChange={(v) => handleConfigChange("max_acceleration", v)} />
             </div>
 
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <Label className="text-xs">Step Size</Label>
-                <span className="font-mono text-xs text-muted-foreground">
-                  {config.step_size}
-                </span>
+                <span className="font-mono text-xs text-muted-foreground">{config.step_size}</span>
               </div>
-              <Slider
-                min={1}
-                max={32}
-                step={1}
-                value={config.step_size}
-                onValueChange={(v) => handleConfigChange("step_size", v)}
-              />
+              <Slider min={1} max={32} step={1} value={config.step_size}
+                onValueChange={(v) => handleConfigChange("step_size", v)} />
             </div>
 
             {pendingConfig && (
@@ -248,8 +208,8 @@ export function MotorCard({ motor }: MotorCardProps) {
               </Button>
             )}
           </div>
-        )}
-      </CardContent>
+        </div>
+      )}
     </Card>
   );
 }

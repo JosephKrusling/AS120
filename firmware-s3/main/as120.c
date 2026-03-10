@@ -448,7 +448,7 @@ bool stepper_interrupt_handler(gptimer_handle_t timer, const gptimer_alarm_event
     // Simulate: home switch triggers in a small negative zone (like a real switch).
     // During homing (moving negative), the motor enters this zone and stops.
     // During normal moves (positive), the switch is never triggered.
-    motor->home_switch = (motor->stepper.position < -3);
+    motor->home_switch = (motor->stepper.position <= 0);
 #else
     motor->home_switch = gpio_get_level(motor->pin_home);
 #endif
