@@ -3,7 +3,7 @@ import { useTransport } from "@/transport/context";
 import type { MotorConfig, WifiNetwork } from "@/transport/types";
 
 export function useAS120() {
-  const { transport, status, connected, connecting, error, connect, disconnect, transportType, setTransportType } =
+  const { transport, status, connected, connecting, error, connect, disconnect, transportType, setTransportType, commLog } =
     useTransport();
 
   const moveMotor = useCallback(
@@ -35,6 +35,11 @@ export function useAS120() {
     await transport.homeAll();
   }, [transport]);
 
+  const clearQueue = useCallback(async () => {
+    if (!transport) return;
+    await transport.clearQueue();
+  }, [transport]);
+
   const setMotorConfig = useCallback(
     async (index: number, config: Partial<MotorConfig>) => {
       if (!transport) return;
@@ -56,6 +61,11 @@ export function useAS120() {
     [transport]
   );
 
+  const wifiReset = useCallback(async () => {
+    if (!transport) return;
+    await transport.wifiReset();
+  }, [transport]);
+
   return {
     status,
     connected,
@@ -69,8 +79,11 @@ export function useAS120() {
     jogMotor,
     homeMotor,
     homeAll,
+    clearQueue,
     setMotorConfig,
     wifiScan,
     wifiConnect,
+    wifiReset,
+    commLog,
   };
 }

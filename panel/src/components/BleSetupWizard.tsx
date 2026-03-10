@@ -3,7 +3,6 @@ import { useAS120 } from "@/hooks/useAS120";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { DebugConsole } from "@/components/DebugConsole";
 import type { WifiNetwork } from "@/transport/types";
 import {
   Bluetooth,
@@ -514,10 +513,6 @@ export function BleSetupWizard({
         </div>
       </main>
 
-      {/* Debug console at bottom */}
-      <div className="mx-auto w-full max-w-lg px-4 pb-4">
-        <DebugConsole />
-      </div>
     </div>
   );
 }

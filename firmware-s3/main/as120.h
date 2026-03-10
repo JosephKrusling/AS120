@@ -19,6 +19,24 @@ typedef enum {
     MOTOR_COUNT        = 4,
 } motor_id_t;
 
+// === Serial log
+#define SERIAL_LOG_MAX 64
+#define SERIAL_LOG_DATA_MAX 8
+
+typedef struct {
+    uint32_t timestamp_ms;  // millis since boot
+    uint8_t  direction;     // 0 = RX, 1 = TX
+    uint8_t  length;
+    uint8_t  data[SERIAL_LOG_DATA_MAX];
+} serial_log_entry_t;
+
+typedef struct {
+    serial_log_entry_t entries[SERIAL_LOG_MAX];
+    uint16_t head;    // next write index
+    uint16_t count;   // total entries (capped at SERIAL_LOG_MAX)
+    uint16_t seq;     // monotonic sequence number
+} serial_log_t;
+
 // === Input modes
 typedef enum {
     INPUT_MODE_4BYTE            = 0,
@@ -90,15 +108,20 @@ typedef struct {
     action_t *current_action;
     action_t *next_action;
     action_t *last_action;
+
+    // Serial packet log
+    serial_log_t serial_log;
 } as120_t;
 
 // The single global device instance (defined in as120.c).
 extern as120_t g_as120;
 
 void as120_enqueue_action(as120_t *dev, action_t action);
+void as120_clear_queue(as120_t *dev);
 void as120_process_next_action(as120_t *dev);
 void as120_handle_command(as120_t *dev, uint8_t command[4]);
 void as120_set_fault(as120_t *dev, fault_code_t code);
+void as120_log_serial(as120_t *dev, uint8_t direction, const uint8_t *data, size_t len);
 bool stepper_interrupt_handler(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_data);
 
 // Generates JSON status string into provided buffer. Returns length written.

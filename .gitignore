@@ -23,6 +23,7 @@ sdkconfig.old.*
 .vscode/
 .idea/
 *.sw?
+.cache/
 
 # Playwright
 .playwright-mcp/

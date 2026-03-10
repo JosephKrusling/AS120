@@ -152,6 +152,10 @@ export class BleTransport implements Transport {
     await this.sendCommand({ cmd: "home_all" });
   }
 
+  async clearQueue(): Promise<void> {
+    await this.sendCommand({ cmd: "clear_queue" });
+  }
+
   async setMotorConfig(
     index: number,
     config: Partial<MotorConfig>
@@ -166,6 +170,10 @@ export class BleTransport implements Transport {
 
   async wifiConnect(ssid: string, password: string): Promise<void> {
     await this.sendCommand({ cmd: "wifi_connect", ssid, password });
+  }
+
+  async wifiReset(): Promise<void> {
+    await this.sendCommand({ cmd: "wifi_reset" });
   }
 
   onStatusUpdate(callback: (status: AS120Status) => void): () => void {

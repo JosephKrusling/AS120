@@ -6,7 +6,7 @@ import React, {
   useEffect,
   useRef,
 } from "react";
-import type { Transport, AS120Status } from "./types";
+import type { Transport, AS120Status, CommPacket } from "./types";
 import { HttpTransport } from "./http";
 import { BleTransport } from "./ble";
 
@@ -17,6 +17,7 @@ interface TransportContextValue {
   connecting: boolean;
   error: string | null;
   transportType: "http" | "ble";
+  commLog: CommPacket[];
   connect: () => Promise<void>;
   disconnect: () => Promise<void>;
   setTransportType: (type: "http" | "ble") => void;
@@ -46,6 +47,7 @@ export function TransportProvider({ children }: { children: React.ReactNode }) {
   const [connected, setConnected] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [commLog, setCommLog] = useState<CommPacket[]>([]);
   const transportRef = useRef<Transport | null>(null);
   const unsubRef = useRef<(() => void) | null>(null);
 
@@ -73,6 +75,10 @@ export function TransportProvider({ children }: { children: React.ReactNode }) {
       const t =
         transportType === "http" ? new HttpTransport() : new BleTransport();
       transportRef.current = t;
+
+      if (t instanceof HttpTransport) {
+        t.onPacket = () => setCommLog([...t.packetLog]);
+      }
 
       unsubRef.current = t.onStatusUpdate((s) => {
         if (s.fault_code === -1 && s.version === "") {
@@ -127,6 +133,7 @@ export function TransportProvider({ children }: { children: React.ReactNode }) {
         connecting,
         error,
         transportType,
+        commLog,
         connect,
         disconnect,
         setTransportType: handleSetTransportType,

@@ -251,6 +251,7 @@ void app_main(void)
 
                 cmd_buf[cmd_len++] = byte;
                 if (cmd_len == 4) {
+                    as120_log_serial(&g_as120, 0, cmd_buf, 4);
                     as120_handle_command(&g_as120, cmd_buf);
                     cmd_len = 0;
                 }

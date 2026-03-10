@@ -25,5 +25,8 @@ esp_err_t wifi_connect_sta(const char *ssid, const char *password);
 // Scan for available networks. Returns number of results found.
 esp_err_t wifi_scan(wifi_scan_result_t *results, int *count, int max);
 
+// Erase stored credentials and restart in AP mode.
+esp_err_t wifi_reset(void);
+
 // Get current WiFi status.
 wifi_status_t wifi_get_status(void);

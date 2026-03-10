@@ -2,6 +2,7 @@ export interface MotorStatus {
   name: string;
   index: number;
   position: number;
+  target: number;
   is_home: boolean;
   speed_min: number;
   speed_max: number;
@@ -16,12 +17,35 @@ export interface WifiStatus {
   ip: string;
 }
 
+export interface QueuedAction {
+  motor: string;
+  motor_idx: number;
+  type: "absolute" | "increment" | "decrement";
+  target: number;
+  position?: number; // only present on active action
+  active: boolean;
+}
+
+export interface SerialLogEntry {
+  t: number;     // timestamp ms since boot
+  dir: "rx" | "tx";
+  hex: string;
+  len: number;
+}
+
+export interface SerialLog {
+  seq: number;
+  entries: SerialLogEntry[];
+}
+
 export interface AS120Status {
   version: string;
   fault_code: number;
   fault_message?: string;
   motors: MotorStatus[];
   wifi?: WifiStatus;
+  queue?: QueuedAction[];
+  serial?: SerialLog;
 }
 
 export interface MotorConfig {
@@ -36,6 +60,17 @@ export interface WifiNetwork {
   rssi: number;
 }
 
+export interface CommPacket {
+  id: number;
+  timestamp: number;
+  direction: "out" | "in";
+  method: string;
+  endpoint: string;
+  body?: string;
+  status?: number;
+  error?: string;
+}
+
 export interface Transport {
   connect(): Promise<void>;
   disconnect(): Promise<void>;
@@ -44,9 +79,11 @@ export interface Transport {
   jogMotor(index: number, steps: number): Promise<void>;
   homeMotor(index: number): Promise<void>;
   homeAll(): Promise<void>;
+  clearQueue(): Promise<void>;
   setMotorConfig(index: number, config: Partial<MotorConfig>): Promise<void>;
   wifiScan(): Promise<WifiNetwork[]>;
   wifiConnect(ssid: string, password: string): Promise<void>;
+  wifiReset(): Promise<void>;
   onStatusUpdate(callback: (status: AS120Status) => void): () => void;
   readonly connected: boolean;
   readonly type: "http" | "ble";

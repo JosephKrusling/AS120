@@ -1,14 +1,16 @@
 import { TransportProvider } from "@/transport/context";
 import { useAS120 } from "@/hooks/useAS120";
 import { MotorCard } from "@/components/MotorCard";
-import { SystemInfo } from "@/components/SystemInfo";
-import { DebugConsole } from "@/components/DebugConsole";
 import { AutosamplerView } from "@/components/AutosamplerView";
+import { CommLog } from "@/components/CommLog";
+import { MotionQueue } from "@/components/MotionQueue";
 import { BleSetupWizard } from "@/components/BleSetupWizard";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   Wifi,
+  WifiOff,
   Bluetooth,
   AlertTriangle,
   Loader2,
@@ -88,6 +90,7 @@ function WifiDashboard({ onBack, showBack = true }: { onBack: () => void; showBa
     connect,
     disconnect,
     homeAll,
+    wifiReset,
   } = useAS120();
 
   const [homing, setHoming] = useState(false);
@@ -268,10 +271,36 @@ function WifiDashboard({ onBack, showBack = true }: { onBack: () => void; showBa
               </Badge>
             )}
           </div>
-          <Badge variant="outline" className="gap-1.5">
-            <Wifi className="h-3 w-3 text-green-400" />
-            {status?.wifi?.ssid || "WiFi"}
-          </Badge>
+          <Popover>
+            <PopoverTrigger asChild>
+              <Badge variant="outline" className="gap-1.5 cursor-pointer hover:bg-accent">
+                <Wifi className="h-3 w-3 text-green-400" />
+                {status?.wifi?.ssid || "WiFi"}
+              </Badge>
+            </PopoverTrigger>
+            <PopoverContent align="end" className="w-56 p-2">
+              <div className="space-y-1">
+                <div className="px-2 py-1.5 text-xs text-muted-foreground">
+                  Connected to <span className="font-medium text-foreground">{status?.wifi?.ssid}</span>
+                </div>
+                {status?.wifi?.ip && (
+                  <div className="px-2 pb-1.5 font-mono text-[11px] text-muted-foreground">
+                    {status.wifi.ip}
+                  </div>
+                )}
+                <div className="border-t border-border" />
+                <button
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-destructive hover:bg-destructive/10 transition-colors"
+                  onClick={async () => {
+                    await wifiReset();
+                  }}
+                >
+                  <WifiOff className="h-3.5 w-3.5" />
+                  Disconnect &amp; enter setup mode
+                </button>
+              </div>
+            </PopoverContent>
+          </Popover>
         </div>
       </header>
 
@@ -321,8 +350,8 @@ function WifiDashboard({ onBack, showBack = true }: { onBack: () => void; showBa
                 ))}
               </div>
             </div>
-            <SystemInfo />
-            <DebugConsole />
+            <MotionQueue />
+            <CommLog />
           </div>
         )}
       </main>

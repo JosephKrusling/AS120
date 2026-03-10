@@ -10,11 +10,32 @@
 #include <driver/gpio.h>
 #include <esp_log.h>
 #include <cJSON.h>
+#include <esp_timer.h>
 
 #define TAG "as120"
 
 // Global device instance
 as120_t g_as120;
+
+void as120_log_serial(as120_t *dev, uint8_t direction, const uint8_t *data, size_t len)
+{
+    serial_log_t *log = &dev->serial_log;
+    serial_log_entry_t *e = &log->entries[log->head];
+    e->timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    e->direction = direction;
+    e->length = len > SERIAL_LOG_DATA_MAX ? SERIAL_LOG_DATA_MAX : (uint8_t)len;
+    memcpy(e->data, data, e->length);
+    log->head = (log->head + 1) % SERIAL_LOG_MAX;
+    if (log->count < SERIAL_LOG_MAX) log->count++;
+    log->seq++;
+}
+
+// Write to UART and log the outgoing packet
+static void serial_tx(as120_t *dev, const void *data, size_t len)
+{
+    uart_write_bytes(dev->uart_num, data, len);
+    as120_log_serial(dev, 1, (const uint8_t *)data, len);
+}
 
 void as120_enqueue_action(as120_t *dev, action_t action)
 {
@@ -29,6 +50,29 @@ void as120_enqueue_action(as120_t *dev, action_t action)
     dev->last_action = a;
 }
 
+void as120_clear_queue(as120_t *dev)
+{
+    // Stop current motion
+    if (dev->current_action != NULL) {
+        motor_t *motor = &dev->motors[dev->current_action->motor_idx];
+        stepper_stop(&motor->stepper);
+        motor->stepper.target = motor->stepper.position;
+        free(dev->current_action);
+        dev->current_action = NULL;
+        dev->active_motor_index = -1;
+    }
+
+    // Free pending actions
+    action_t *a = dev->next_action;
+    while (a != NULL) {
+        action_t *next = a->next;
+        free(a);
+        a = next;
+    }
+    dev->next_action = NULL;
+    dev->last_action = NULL;
+}
+
 void as120_process_next_action(as120_t *dev)
 {
     // Check if current action is complete
@@ -41,7 +85,7 @@ void as120_process_next_action(as120_t *dev)
                 as120_set_fault(dev, FAULT_I2C_TRANSMIT);
 
             if (dev->current_action->send_ok_on_completion)
-                uart_write_bytes(dev->uart_num, "ok\r", 3);
+                serial_tx(dev, "ok\r", 3);
 
             action_t *done = dev->current_action;
             dev->current_action = NULL;
@@ -156,7 +200,7 @@ void as120_handle_command(as120_t *dev, uint8_t command[4])
         if (command[1] == '?' && command[2] == '?' && is_line_ending(command[3])) {
             uint16_t position = dev->motors[motor_index].stepper.position;
             char response[6] = { position >> 8, position & 0xff, 0, 'o', 'k', '\r' };
-            uart_write_bytes(dev->uart_num, response, 6);
+            serial_tx(dev, response, 6);
             goto DONE;
         }
 
@@ -250,14 +294,14 @@ void as120_handle_command(as120_t *dev, uint8_t command[4])
         (command[1] == 'U' || command[1] == 'u') &&
         (command[2] == 'P' || command[2] == 'p') && command[3] == '?') {
         // TODO: Implement cup sensor. For now always return 0.
-        uart_write_bytes(dev->uart_num, "0ok\n", 4);
+        serial_tx(dev, "0ok\n", 4);
         goto DONE;
     }
 
     // Fault query: flt? or FLT?
     if (cmd == 0x666c743f || cmd == 0x464c543f) {
         char response[4] = { dev->fault_code, 'o', 'k', '\n' };
-        uart_write_bytes(dev->uart_num, response, 4);
+        serial_tx(dev, response, 4);
         goto DONE;
     }
 
@@ -270,7 +314,7 @@ void as120_handle_command(as120_t *dev, uint8_t command[4])
     // Fault detail: fdt? or FDT?
     if (cmd == 0x6664743f || cmd == 0x4644543f) {
         char response[4] = { dev->fault_code, 'o', 'k', '\n' };
-        uart_write_bytes(dev->uart_num, response, 4);
+        serial_tx(dev, response, 4);
         goto DONE;
     }
 
@@ -282,7 +326,7 @@ void as120_handle_command(as120_t *dev, uint8_t command[4])
     // Enter Lua mode: lua{cr} or LUA{cr}
     if (cmd == 0x6c75610d || cmd == 0x4c55410d) {
         dev->input_mode = INPUT_MODE_LUA;
-        uart_write_bytes(dev->uart_num,
+        serial_tx(dev,
             "Lua mode enabled. Type \"help\" for commands or \"exit()\" to return to 4-byte command mode.\nlua> ", 94);
         goto DONE;
     }
@@ -293,7 +337,7 @@ void as120_handle_command(as120_t *dev, uint8_t command[4])
         is_line_ending(command[2]) && is_line_ending(command[3])) {
         uint8_t data[SYSTEM_PARAMETERS_LENGTH];
         read_system_parameters(data);
-        uart_write_bytes(dev->uart_num, (const char *)data, SYSTEM_PARAMETERS_LENGTH);
+        serial_tx(dev, (const char *)data, SYSTEM_PARAMETERS_LENGTH);
         goto ACK;
     }
 
@@ -310,11 +354,11 @@ void as120_handle_command(as120_t *dev, uint8_t command[4])
         (command[1] == 'R' || command[1] == 'r') && is_line_ending(command[3])) {
         uint8_t page = command[2];
         uint8_t header[2] = { 0, page };
-        uart_write_bytes(dev->uart_num, (const char *)header, 2);
+        serial_tx(dev, (const char *)header, 2);
         uint8_t data[METHOD_PARAMETERS_LENGTH];
         memset(data, 0, METHOD_PARAMETERS_LENGTH);
         read_method_parameters(data, page);
-        uart_write_bytes(dev->uart_num, (const char *)data, METHOD_PARAMETERS_LENGTH);
+        serial_tx(dev, (const char *)data, METHOD_PARAMETERS_LENGTH);
         goto ACK;
     }
 
@@ -340,7 +384,7 @@ void as120_handle_command(as120_t *dev, uint8_t command[4])
         memcpy(data, &maj, 2);
         memcpy(data + 2, &min, 2);
         memcpy(data + 4, &pat, 2);
-        uart_write_bytes(dev->uart_num, (const char *)data, 6);
+        serial_tx(dev, (const char *)data, 6);
         goto ACK;
     }
 
@@ -349,12 +393,12 @@ void as120_handle_command(as120_t *dev, uint8_t command[4])
     goto NAK;
 
 ACK:
-    uart_write_bytes(dev->uart_num, "ok\r", 3);
+    serial_tx(dev, "ok\r", 3);
 DONE:
     return;
 
 NAK:
-    uart_write_bytes(dev->uart_num, "Error:1\n", 8);
+    serial_tx(dev, "Error:1\n", 8);
 }
 
 void as120_set_fault(as120_t *dev, fault_code_t code)
@@ -397,6 +441,7 @@ int as120_get_status_json(const as120_t *dev, char *buf, size_t buf_size)
         cJSON_AddStringToObject(motor, "name", m->name);
         cJSON_AddNumberToObject(motor, "index", m->index);
         cJSON_AddNumberToObject(motor, "position", (double)m->stepper.position);
+        cJSON_AddNumberToObject(motor, "target", (double)m->stepper.target);
         cJSON_AddBoolToObject(motor, "is_home", m->is_home);
         cJSON_AddNumberToObject(motor, "speed_min", (double)m->stepper.speed_min);
         cJSON_AddNumberToObject(motor, "speed_max", (double)m->stepper.speed_max);
@@ -414,6 +459,60 @@ int as120_get_status_json(const as120_t *dev, char *buf, size_t buf_size)
     cJSON_AddStringToObject(wifi, "ssid", ws.ssid);
     cJSON_AddStringToObject(wifi, "ip", ws.ip);
     cJSON_AddItemToObject(root, "wifi", wifi);
+
+    // Action queue
+    cJSON *queue = cJSON_CreateArray();
+    static const char *action_type_names[] = { "absolute", "increment", "decrement" };
+
+    // Current action (in progress)
+    if (dev->current_action != NULL) {
+        cJSON *item = cJSON_CreateObject();
+        action_t *a = dev->current_action;
+        cJSON_AddStringToObject(item, "motor", dev->motors[a->motor_idx].name);
+        cJSON_AddNumberToObject(item, "motor_idx", a->motor_idx);
+        cJSON_AddStringToObject(item, "type", action_type_names[a->type]);
+        cJSON_AddNumberToObject(item, "target", (double)a->target);
+        cJSON_AddNumberToObject(item, "position", (double)dev->motors[a->motor_idx].stepper.position);
+        cJSON_AddBoolToObject(item, "active", true);
+        cJSON_AddItemToArray(queue, item);
+    }
+
+    // Pending actions (up to 20)
+    int pending_count = 0;
+    for (action_t *a = dev->next_action; a != NULL && pending_count < 20; a = a->next, pending_count++) {
+        cJSON *item = cJSON_CreateObject();
+        cJSON_AddStringToObject(item, "motor", dev->motors[a->motor_idx].name);
+        cJSON_AddNumberToObject(item, "motor_idx", a->motor_idx);
+        cJSON_AddStringToObject(item, "type", action_type_names[a->type]);
+        cJSON_AddNumberToObject(item, "target", (double)a->target);
+        cJSON_AddBoolToObject(item, "active", false);
+        cJSON_AddItemToArray(queue, item);
+    }
+    cJSON_AddItemToObject(root, "queue", queue);
+
+    // Serial log
+    cJSON *serial = cJSON_CreateObject();
+    cJSON_AddNumberToObject(serial, "seq", dev->serial_log.seq);
+    cJSON *serial_entries = cJSON_CreateArray();
+    // Walk the ring buffer from oldest to newest
+    uint16_t count = dev->serial_log.count;
+    uint16_t start = (dev->serial_log.head + SERIAL_LOG_MAX - count) % SERIAL_LOG_MAX;
+    for (uint16_t i = 0; i < count; i++) {
+        const serial_log_entry_t *e = &dev->serial_log.entries[(start + i) % SERIAL_LOG_MAX];
+        cJSON *entry = cJSON_CreateObject();
+        cJSON_AddNumberToObject(entry, "t", e->timestamp_ms);
+        cJSON_AddStringToObject(entry, "dir", e->direction == 0 ? "rx" : "tx");
+        // Encode data as hex string
+        char hex[SERIAL_LOG_DATA_MAX * 2 + 1];
+        for (int j = 0; j < e->length; j++)
+            snprintf(hex + j * 2, 3, "%02x", e->data[j]);
+        hex[e->length * 2] = '\0';
+        cJSON_AddStringToObject(entry, "hex", hex);
+        cJSON_AddNumberToObject(entry, "len", e->length);
+        cJSON_AddItemToArray(serial_entries, entry);
+    }
+    cJSON_AddItemToObject(serial, "entries", serial_entries);
+    cJSON_AddItemToObject(root, "serial", serial);
 
     int len = 0;
     if (cJSON_PrintPreallocated(root, buf, (int)buf_size, 0)) {
@@ -448,7 +547,7 @@ bool stepper_interrupt_handler(gptimer_handle_t timer, const gptimer_alarm_event
     // Simulate: home switch triggers in a small negative zone (like a real switch).
     // During homing (moving negative), the motor enters this zone and stops.
     // During normal moves (positive), the switch is never triggered.
-    motor->home_switch = (motor->stepper.position <= 0);
+    motor->home_switch = (motor->stepper.position < 0);
 #else
     motor->home_switch = gpio_get_level(motor->pin_home);
 #endif

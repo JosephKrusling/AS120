@@ -275,6 +275,26 @@ esp_err_t wifi_scan(wifi_scan_result_t *results, int *count, int max)
     return ESP_OK;
 }
 
+esp_err_t wifi_reset(void)
+{
+    ESP_LOGI(TAG, "Resetting WiFi — erasing credentials and switching to AP mode");
+
+    // Erase stored credentials
+    nvs_handle_t handle;
+    if (nvs_open(WIFI_NVS_NAMESPACE, NVS_READWRITE, &handle) == ESP_OK) {
+        nvs_erase_all(handle);
+        nvs_commit(handle);
+        nvs_close(handle);
+    }
+
+    // Stop current WiFi and switch to AP mode
+    esp_wifi_stop();
+    s_is_connected = false;
+    start_ap_mode();
+
+    return ESP_OK;
+}
+
 wifi_status_t wifi_get_status(void)
 {
     wifi_status_t status = {0};

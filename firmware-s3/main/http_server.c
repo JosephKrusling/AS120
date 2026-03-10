@@ -335,6 +335,19 @@ static esp_err_t api_home_all_handler(httpd_req_t *req)
 }
 
 // ---------------------------------------------------------------------------
+// API: Clear queue
+// ---------------------------------------------------------------------------
+
+static esp_err_t api_clear_queue_handler(httpd_req_t *req)
+{
+    set_cors_headers(req);
+    httpd_resp_set_type(req, "application/json");
+    as120_clear_queue(&g_as120);
+    httpd_resp_sendstr(req, "{\"ok\":true}");
+    return ESP_OK;
+}
+
+// ---------------------------------------------------------------------------
 // API: WiFi scan
 // ---------------------------------------------------------------------------
 
@@ -428,6 +441,26 @@ static esp_err_t api_wifi_status_handler(httpd_req_t *req)
     cJSON_Delete(json);
     httpd_resp_sendstr(req, json_str);
     free(json_str);
+    return ESP_OK;
+}
+
+// ---------------------------------------------------------------------------
+// API: WiFi reset (erase credentials, switch to AP mode)
+// ---------------------------------------------------------------------------
+
+static esp_err_t api_wifi_reset_handler(httpd_req_t *req)
+{
+    set_cors_headers(req);
+    httpd_resp_set_type(req, "application/json");
+
+    esp_err_t err = wifi_reset();
+    if (err != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                            "{\"error\":\"wifi reset failed\"}");
+        return ESP_FAIL;
+    }
+
+    httpd_resp_sendstr(req, "{\"ok\":true}");
     return ESP_OK;
 }
 
@@ -608,6 +641,13 @@ esp_err_t http_server_start(void)
     };
     httpd_register_uri_handler(s_server, &home_all_uri);
 
+    httpd_uri_t clear_queue_uri = {
+        .uri = "/api/queue/clear",
+        .method = HTTP_POST,
+        .handler = api_clear_queue_handler,
+    };
+    httpd_register_uri_handler(s_server, &clear_queue_uri);
+
     httpd_uri_t wifi_scan_uri = {
         .uri = "/api/wifi/scan",
         .method = HTTP_GET,
@@ -628,6 +668,13 @@ esp_err_t http_server_start(void)
         .handler = api_wifi_status_handler,
     };
     httpd_register_uri_handler(s_server, &wifi_status_uri);
+
+    httpd_uri_t wifi_reset_uri = {
+        .uri = "/api/wifi/reset",
+        .method = HTTP_POST,
+        .handler = api_wifi_reset_handler,
+    };
+    httpd_register_uri_handler(s_server, &wifi_reset_uri);
 
     httpd_uri_t ota_spiffs_uri = {
         .uri = "/api/ota/spiffs",
