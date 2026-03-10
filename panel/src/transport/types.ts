@@ -38,14 +38,33 @@ export interface SerialLog {
   entries: SerialLogEntry[];
 }
 
+export interface FwLogEntry {
+  t: number;     // timestamp ms since boot
+  msg: string;   // formatted log message
+}
+
+export interface FwLog {
+  seq: number;
+  entries: FwLogEntry[];
+}
+
+export interface CompletedAction {
+  motor: string;
+  motor_idx: number;
+  type: "absolute" | "increment" | "decrement";
+  target: number;
+}
+
 export interface AS120Status {
   version: string;
   fault_code: number;
   fault_message?: string;
   motors: MotorStatus[];
   wifi?: WifiStatus;
+  history?: CompletedAction[];
   queue?: QueuedAction[];
   serial?: SerialLog;
+  logs?: FwLog;
 }
 
 export interface MotorConfig {

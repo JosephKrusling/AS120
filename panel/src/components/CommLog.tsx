@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { useAS120 } from "@/hooks/useAS120";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ArrowUp, ArrowDown, Radio } from "lucide-react";
-import type { CommPacket, SerialLogEntry } from "@/transport/types";
+import type { CommPacket, SerialLogEntry, FwLogEntry } from "@/transport/types";
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -174,27 +174,80 @@ function SerialRow({ entry }: { entry: SerialLogEntry }) {
 }
 
 // ---------------------------------------------------------------------------
+// Firmware log row
+// ---------------------------------------------------------------------------
+
+/** Parse ESP_LOG level from first char: I=info, W=warn, E=error */
+function logLevelColor(msg: string): string {
+  const ch = msg.charAt(0);
+  if (ch === "E") return "text-red-400";
+  if (ch === "W") return "text-amber-400";
+  return "text-emerald-400";
+}
+
+function logLevelBadgeColor(msg: string): string {
+  const ch = msg.charAt(0);
+  if (ch === "E") return "bg-red-500/10 text-red-400";
+  if (ch === "W") return "bg-amber-500/10 text-amber-400";
+  return "bg-emerald-500/10 text-emerald-400";
+}
+
+function FwLogRow({ entry }: { entry: FwLogEntry }) {
+  // ESP_LOG format: "I (12345) tag: message"
+  // Extract level badge and the rest
+  const level = entry.msg.charAt(0);
+  // Strip the "X (nnn) " prefix to show just "tag: message"
+  const body = entry.msg.replace(/^[IWED]\s*\(\d+\)\s*/, "");
+
+  return (
+    <div className="flex items-start gap-2 px-2 py-1 text-[11px] font-mono hover:bg-muted/50 rounded transition-colors">
+      <span className="text-muted-foreground shrink-0 w-[72px]">
+        {formatUptime(entry.t)}
+      </span>
+      <span className={`shrink-0 w-5 text-center text-[10px] font-bold rounded px-0.5 ${logLevelBadgeColor(entry.msg)}`}>
+        {level}
+      </span>
+      <span className={`break-all ${logLevelColor(entry.msg)}`}>
+        {body}
+      </span>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
 
 export function CommLog() {
   const { commLog, status } = useAS120();
-  const [tab, setTab] = useState<"serial" | "http">("serial");
+  const [tab, setTab] = useState<"logs" | "serial" | "http">("logs");
 
   // Track serial entries with deduplication via seq number
-  const lastSeqRef = useRef(0);
+  const lastSerialSeqRef = useRef(0);
   const [serialEntries, setSerialEntries] = useState<SerialLogEntry[]>([]);
+
+  // Track firmware log entries with deduplication via seq number
+  const lastFwLogSeqRef = useRef(0);
+  const [fwLogEntries, setFwLogEntries] = useState<FwLogEntry[]>([]);
 
   useEffect(() => {
     if (!status?.serial) return;
     const { seq, entries } = status.serial;
-    if (seq !== lastSeqRef.current && entries.length > 0) {
-      lastSeqRef.current = seq;
-      // Replace with latest snapshot from firmware (already ordered oldest→newest)
-      // Reverse so newest is at top
+    if (seq !== lastSerialSeqRef.current && entries.length > 0) {
+      lastSerialSeqRef.current = seq;
       setSerialEntries([...entries].reverse());
     }
   }, [status?.serial]);
+
+  useEffect(() => {
+    if (!status?.logs) return;
+    const { seq, entries } = status.logs;
+    if (seq !== lastFwLogSeqRef.current && entries.length > 0) {
+      lastFwLogSeqRef.current = seq;
+      // Reverse so newest is at top
+      setFwLogEntries([...entries].reverse());
+    }
+  }, [status?.logs]);
 
   return (
     <Card>
@@ -203,6 +256,7 @@ export function CommLog() {
           <Radio className="h-4 w-4 text-muted-foreground" />
           Communications
           <div className="ml-auto flex gap-1">
+            <Tab label="Firmware Logs" active={tab === "logs"} count={fwLogEntries.length} onClick={() => setTab("logs")} />
             <Tab label="Serial" active={tab === "serial"} count={serialEntries.length} onClick={() => setTab("serial")} />
             <Tab label="HTTP" active={tab === "http"} count={commLog.length} onClick={() => setTab("http")} />
           </div>
@@ -210,7 +264,19 @@ export function CommLog() {
       </CardHeader>
       <CardContent className="px-2 pb-2">
         <div className="max-h-64 overflow-y-auto rounded-md border border-border bg-background">
-          {tab === "serial" ? (
+          {tab === "logs" ? (
+            fwLogEntries.length === 0 ? (
+              <div className="flex items-center justify-center py-8 text-xs text-muted-foreground">
+                No firmware logs yet
+              </div>
+            ) : (
+              <div className="divide-y divide-border/50">
+                {fwLogEntries.map((e, i) => (
+                  <FwLogRow key={`${e.t}-${i}`} entry={e} />
+                ))}
+              </div>
+            )
+          ) : tab === "serial" ? (
             serialEntries.length === 0 ? (
               <div className="flex items-center justify-center py-8 text-xs text-muted-foreground">
                 No serial packets yet

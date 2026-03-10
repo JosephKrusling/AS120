@@ -175,13 +175,13 @@ static esp_err_t api_status_handler(httpd_req_t *req)
     set_cors_headers(req);
     httpd_resp_set_type(req, "application/json");
 
-    char *buf = malloc(2048);
+    char *buf = malloc(8192);
     if (buf == NULL) {
         httpd_resp_send_500(req);
         return ESP_FAIL;
     }
 
-    int len = as120_get_status_json(&g_as120, buf, 2048);
+    int len = as120_get_status_json(&g_as120, buf, 8192);
     httpd_resp_send(req, buf, len);
     free(buf);
     return ESP_OK;

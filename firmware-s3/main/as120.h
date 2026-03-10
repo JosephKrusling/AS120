@@ -19,6 +19,25 @@ typedef enum {
     MOTOR_COUNT        = 4,
 } motor_id_t;
 
+// === Firmware log (captures ESP_LOG output)
+#define FW_LOG_MAX 50
+#define FW_LOG_MSG_MAX 128
+
+typedef struct {
+    uint32_t timestamp_ms;
+    char message[FW_LOG_MSG_MAX];
+} fw_log_entry_t;
+
+typedef struct {
+    fw_log_entry_t entries[FW_LOG_MAX];
+    uint8_t head;
+    uint8_t count;
+    uint16_t seq;
+} fw_log_t;
+
+// Global firmware log (defined in main.c, separate from device state for early init).
+extern fw_log_t g_fw_log;
+
 // === Serial log
 #define SERIAL_LOG_MAX 64
 #define SERIAL_LOG_DATA_MAX 8
@@ -60,6 +79,21 @@ typedef struct action {
     int64_t target;
     struct action *next;
 } action_t;
+
+// Completed action (stored in history ring buffer).
+#define ACTION_HISTORY_MAX 20
+
+typedef struct {
+    action_type_t type;
+    uint8_t motor_idx;
+    int64_t target;
+} action_history_entry_t;
+
+typedef struct {
+    action_history_entry_t entries[ACTION_HISTORY_MAX];
+    uint8_t head;   // next write index
+    uint8_t count;  // entries stored (capped at ACTION_HISTORY_MAX)
+} action_history_t;
 
 // Stored 3-axis position (for coordinate save/recall).
 typedef struct {
@@ -108,6 +142,9 @@ typedef struct {
     action_t *current_action;
     action_t *next_action;
     action_t *last_action;
+
+    // Completed action history
+    action_history_t action_history;
 
     // Serial packet log
     serial_log_t serial_log;

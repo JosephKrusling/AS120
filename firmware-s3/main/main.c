@@ -10,6 +10,8 @@
 #include "nvs_flash.h"
 #include "esp_log.h"
 
+#include "esp_timer.h"
+
 #include "constants.h"
 #include "as120.h"
 #include "luavm.h"
@@ -19,6 +21,61 @@
 #include "ble_server.h"
 
 #define TAG "as120"
+
+// ---------------------------------------------------------------------------
+// Firmware log ring buffer — captures ESP_LOG output
+// ---------------------------------------------------------------------------
+
+fw_log_t g_fw_log;
+static vprintf_like_t s_original_vprintf;
+
+// Strip ANSI escape sequences in-place (e.g. \033[0;32m)
+static void strip_ansi(char *str)
+{
+    char *read = str, *write = str;
+    while (*read) {
+        if (*read == '\033' && *(read + 1) == '[') {
+            read += 2;
+            while (*read && *read != 'm') read++;
+            if (*read == 'm') read++;
+        } else {
+            *write++ = *read++;
+        }
+    }
+    *write = '\0';
+}
+
+static int fw_log_vprintf(const char *fmt, va_list args)
+{
+    // Format into ring buffer entry
+    fw_log_t *log = &g_fw_log;
+    fw_log_entry_t *e = &log->entries[log->head];
+    e->timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000);
+
+    va_list args_copy;
+    va_copy(args_copy, args);
+    vsnprintf(e->message, FW_LOG_MSG_MAX, fmt, args_copy);
+    va_end(args_copy);
+
+    // Strip ANSI color codes
+    strip_ansi(e->message);
+
+    // Strip trailing whitespace
+    size_t len = strlen(e->message);
+    while (len > 0 && (e->message[len - 1] == '\n' || e->message[len - 1] == '\r' || e->message[len - 1] == ' '))
+        e->message[--len] = '\0';
+
+    // Skip empty messages after stripping
+    if (len == 0)
+        return s_original_vprintf(fmt, args);
+
+    log->head = (log->head + 1) % FW_LOG_MAX;
+    if (log->count < FW_LOG_MAX) log->count++;
+    log->seq++;
+
+    // Still print to UART
+    return s_original_vprintf(fmt, args);
+}
 
 static void init_gpio(void)
 {
@@ -194,6 +251,9 @@ static void init_motors(as120_t *dev, i2c_master_bus_handle_t *bus)
 
 void app_main(void)
 {
+    // Install log hook before any ESP_LOG calls
+    s_original_vprintf = esp_log_set_vprintf(fw_log_vprintf);
+
     ESP_LOGI(TAG, "AS120-S3 v%d.%d.%d", VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH);
     ESP_LOGI(TAG, "Reset reason: %d", esp_reset_reason());
 

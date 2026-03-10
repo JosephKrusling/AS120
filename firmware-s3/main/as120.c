@@ -71,6 +71,10 @@ void as120_clear_queue(as120_t *dev)
     }
     dev->next_action = NULL;
     dev->last_action = NULL;
+
+    // Clear history
+    dev->action_history.head = 0;
+    dev->action_history.count = 0;
 }
 
 void as120_process_next_action(as120_t *dev)
@@ -87,7 +91,17 @@ void as120_process_next_action(as120_t *dev)
             if (dev->current_action->send_ok_on_completion)
                 serial_tx(dev, "ok\r", 3);
 
+            // Store in history before freeing
             action_t *done = dev->current_action;
+            action_history_t *hist = &dev->action_history;
+            hist->entries[hist->head] = (action_history_entry_t){
+                .type = done->type,
+                .motor_idx = done->motor_idx,
+                .target = done->target,
+            };
+            hist->head = (hist->head + 1) % ACTION_HISTORY_MAX;
+            if (hist->count < ACTION_HISTORY_MAX) hist->count++;
+
             dev->current_action = NULL;
             dev->active_motor_index = -1;
             free(done);
@@ -460,9 +474,27 @@ int as120_get_status_json(const as120_t *dev, char *buf, size_t buf_size)
     cJSON_AddStringToObject(wifi, "ip", ws.ip);
     cJSON_AddItemToObject(root, "wifi", wifi);
 
+    static const char *action_type_names[] = { "absolute", "increment", "decrement" };
+
+    // Action history (completed actions, oldest first)
+    cJSON *history = cJSON_CreateArray();
+    {
+        const action_history_t *hist = &dev->action_history;
+        uint8_t start = (hist->head + ACTION_HISTORY_MAX - hist->count) % ACTION_HISTORY_MAX;
+        for (uint8_t i = 0; i < hist->count; i++) {
+            const action_history_entry_t *e = &hist->entries[(start + i) % ACTION_HISTORY_MAX];
+            cJSON *item = cJSON_CreateObject();
+            cJSON_AddStringToObject(item, "motor", dev->motors[e->motor_idx].name);
+            cJSON_AddNumberToObject(item, "motor_idx", e->motor_idx);
+            cJSON_AddStringToObject(item, "type", action_type_names[e->type]);
+            cJSON_AddNumberToObject(item, "target", (double)e->target);
+            cJSON_AddItemToArray(history, item);
+        }
+    }
+    cJSON_AddItemToObject(root, "history", history);
+
     // Action queue
     cJSON *queue = cJSON_CreateArray();
-    static const char *action_type_names[] = { "absolute", "increment", "decrement" };
 
     // Current action (in progress)
     if (dev->current_action != NULL) {
@@ -513,6 +545,24 @@ int as120_get_status_json(const as120_t *dev, char *buf, size_t buf_size)
     }
     cJSON_AddItemToObject(serial, "entries", serial_entries);
     cJSON_AddItemToObject(root, "serial", serial);
+
+    // Firmware log (ESP_LOG capture)
+    cJSON *fw_log = cJSON_CreateObject();
+    cJSON_AddNumberToObject(fw_log, "seq", g_fw_log.seq);
+    cJSON *fw_entries = cJSON_CreateArray();
+    {
+        uint8_t fw_count = g_fw_log.count;
+        uint8_t fw_start = (g_fw_log.head + FW_LOG_MAX - fw_count) % FW_LOG_MAX;
+        for (uint8_t i = 0; i < fw_count; i++) {
+            const fw_log_entry_t *e = &g_fw_log.entries[(fw_start + i) % FW_LOG_MAX];
+            cJSON *entry = cJSON_CreateObject();
+            cJSON_AddNumberToObject(entry, "t", e->timestamp_ms);
+            cJSON_AddStringToObject(entry, "msg", e->message);
+            cJSON_AddItemToArray(fw_entries, entry);
+        }
+    }
+    cJSON_AddItemToObject(fw_log, "entries", fw_entries);
+    cJSON_AddItemToObject(root, "logs", fw_log);
 
     int len = 0;
     if (cJSON_PrintPreallocated(root, buf, (int)buf_size, 0)) {
