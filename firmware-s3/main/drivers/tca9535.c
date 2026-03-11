@@ -70,16 +70,25 @@ void tca9535_set_polarity_inversion(tca9535_t *tca, uint8_t port, uint8_t value)
 
 void tca9535_set_configuration(tca9535_t *tca, uint8_t port, uint8_t value)
 {
+    if (port == TCA9535_PORT_0)
+        tca->config_port_0 = value;
+    else
+        tca->config_port_1 = value;
     write_register(tca, REG_CONFIGURATION, port, value);
+}
+
+static void resolve_pin(uint8_t *pin, uint8_t *port, uint8_t *bit)
+{
+    if (*pin >= 8)
+        *pin -= 2; // Port 2 starts at pin 10 on this board layout
+    *port = *pin / 8;
+    *bit = *pin % 8;
 }
 
 void tca9535_set_output_pin(tca9535_t *tca, uint8_t pin, uint8_t value, bool flush)
 {
-    if (pin >= 8)
-        pin -= 2; // Port 2 starts at pin 10 on this board layout
-
-    uint8_t port = pin / 8;
-    uint8_t bit = pin % 8;
+    uint8_t port, bit;
+    resolve_pin(&pin, &port, &bit);
 
     if (port == TCA9535_PORT_0)
         tca->output_port_0 = (tca->output_port_0 & ~(1 << bit)) | (value << bit);
@@ -93,5 +102,26 @@ void tca9535_set_output_pin(tca9535_t *tca, uint8_t pin, uint8_t value, bool flu
     if (flush) {
         write_register(tca, REG_OUTPUT, TCA9535_PORT_0, tca->output_port_0);
         write_register(tca, REG_OUTPUT, TCA9535_PORT_1, tca->output_port_1);
+    }
+}
+
+void tca9535_set_pin_direction(tca9535_t *tca, uint8_t pin, bool is_input, bool flush)
+{
+    uint8_t port, bit;
+    resolve_pin(&pin, &port, &bit);
+    uint8_t val = is_input ? 1 : 0;
+
+    if (port == TCA9535_PORT_0)
+        tca->config_port_0 = (tca->config_port_0 & ~(1 << bit)) | (val << bit);
+    else if (port == TCA9535_PORT_1)
+        tca->config_port_1 = (tca->config_port_1 & ~(1 << bit)) | (val << bit);
+    else {
+        ESP_LOGE(TAG, "Invalid port %d", port);
+        return;
+    }
+
+    if (flush) {
+        write_register(tca, REG_CONFIGURATION, TCA9535_PORT_0, tca->config_port_0);
+        write_register(tca, REG_CONFIGURATION, TCA9535_PORT_1, tca->config_port_1);
     }
 }

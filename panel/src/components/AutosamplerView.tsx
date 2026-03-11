@@ -1,4 +1,5 @@
 import { useRef, useCallback, useState, useEffect } from "react";
+import { useAS120 } from "@/hooks/useAS120";
 import type { MotorStatus } from "@/transport/types";
 
 interface Props {
@@ -40,6 +41,19 @@ const CA = Math.cos(A);
 const SA = Math.sin(A);
 function iso(x: number, y: number, z: number): [number, number] {
   return [(x - y) * CA, (x + y) * SA - z];
+}
+
+// Inverse isometric: screen coords + known z → world (x, y)
+function isoInverse(sx: number, sy: number, z: number): [number, number] {
+  const xMinusY = sx / CA;
+  const xPlusY = (sy + z) / SA;
+  return [(xMinusY + xPlusY) / 2, (xPlusY - xMinusY) / 2];
+}
+
+// Base physical travel per axis in full steps. Multiply by 2^(step_size-1) for microstepped range.
+const FULL_STEP_RANGE: Record<string, number> = { LR: 2250, FB: 500, UD: 500, PL: 500 };
+function axisRange(name: string, stepSize: number): number {
+  return (FULL_STEP_RANGE[name] ?? 500) * (1 << (stepSize - 1));
 }
 
 function darken(hex: string, f: number): string {
@@ -143,11 +157,23 @@ export function AutosamplerView({ motors }: Props) {
   const ud = motors.find((m) => m.name === "UD");
   const syringe = motors.find((m) => m.name === "PL");
 
-  // Clamp all axes to [0, 2000] then smooth
-  const lrPos = useSmoothValue(Math.max(0, Math.min(2000, lr?.position ?? 0)));
-  const fbPos = useSmoothValue(Math.max(0, Math.min(2000, fb?.position ?? 0)));
-  const udPos = useSmoothValue(Math.max(0, Math.min(2000, ud?.position ?? 0)));
-  const syringePos = useSmoothValue(Math.max(0, Math.min(2000, syringe?.position ?? 0)));
+  // Dynamic ranges based on current microstepping
+  const lrRange = axisRange("LR", lr?.step_size ?? 3);
+  const fbRange = axisRange("FB", fb?.step_size ?? 3);
+  const udRange = axisRange("UD", ud?.step_size ?? 3);
+  const plRange = axisRange("PL", syringe?.step_size ?? 3);
+
+  const lrPos = useSmoothValue(Math.max(0, Math.min(lrRange, lr?.position ?? 0)));
+  const fbPos = useSmoothValue(Math.max(0, Math.min(fbRange, fb?.position ?? 0)));
+  const udPos = useSmoothValue(Math.max(0, Math.min(udRange, ud?.position ?? 0)));
+  const syringePos = useSmoothValue(Math.max(0, Math.min(plRange, syringe?.position ?? 0)));
+
+  // Drag-to-move state
+  const { moveMotor, status } = useAS120();
+  const svgRef = useRef<SVGSVGElement>(null);
+  const dragging = useRef(false);
+  const [dragPos, setDragPos] = useState<{ lr: number; fb: number } | null>(null);
+  const lastSend = useRef(0);
 
   // Base: 21" wide, 6" deep, 4" high
   const baseW = 21 * INCH;
@@ -177,13 +203,86 @@ export function AutosamplerView({ motors }: Props) {
   // LR=2000: left edge of head = left edge of base
   // Travel = baseW - headW
   const headTravel = baseW - headW;
-  const headX = baseX + headTravel - (lrPos / 2000) * headTravel;
-  const fbTravel = 4.25 * INCH; // max forward travel
-  const headY = baseY + (fbPos / 2000) * fbTravel; // FB=0: back-aligned, FB=2000: 4.25" forward
-  const headZ = baseZ + baseH; // sits on top of base
+  const fbTravel = 4.25 * INCH;
+  const headZ = baseZ + baseH;
+
+  // Real head always tracks smoothed motor position
+  const headX = baseX + headTravel - (lrPos / lrRange) * headTravel;
+  const headY = baseY + (fbPos / fbRange) * fbTravel;
+
+  // Ghost: drag target during drag, final queue target otherwise
+  const queue = status?.queue ?? [];
+  function finalQueueTarget(motorIdx: number, currentPos: number): number {
+    let pos = currentPos;
+    for (const a of queue) {
+      if (a.motor_idx !== motorIdx) continue;
+      if (a.type === "absolute") pos = a.target;
+      else if (a.type === "increment") pos += a.target;
+      else pos -= a.target;
+    }
+    return pos;
+  }
+  const ghostLR = dragPos !== null ? dragPos.lr : finalQueueTarget(lr?.index ?? -1, lr?.position ?? 0);
+  const ghostFB = dragPos !== null ? dragPos.fb : finalQueueTarget(fb?.index ?? -1, fb?.position ?? 0);
+  const ghostX = baseX + headTravel - (ghostLR / lrRange) * headTravel;
+  const ghostY = baseY + (ghostFB / fbRange) * fbTravel;
+  const showGhost = Math.abs(ghostLR - lrPos) > 5 || Math.abs(ghostFB - fbPos) > 5;
+
+  // Convert client pointer position → motor step values
+  function clientToSteps(clientX: number, clientY: number) {
+    const svg = svgRef.current;
+    if (!svg) return null;
+    const pt = svg.createSVGPoint();
+    pt.x = clientX;
+    pt.y = clientY;
+    const ctm = svg.getScreenCTM();
+    if (!ctm) return null;
+    const svgPt = pt.matrixTransform(ctm.inverse());
+    const [wx, wy] = isoInverse(svgPt.x, svgPt.y, headZ + headH / 2);
+    return {
+      lr: Math.round(Math.max(0, Math.min(lrRange, ((baseX + headTravel - wx) / headTravel) * lrRange))),
+      fb: Math.round(Math.max(0, Math.min(fbRange, ((wy - baseY) / fbTravel) * fbRange))),
+    };
+  }
+
+  function handlePointerDown(e: React.PointerEvent) {
+    e.preventDefault();
+    (e.target as Element).setPointerCapture(e.pointerId);
+    dragging.current = true;
+    const steps = clientToSteps(e.clientX, e.clientY);
+    if (steps) setDragPos(steps);
+  }
+
+  function handlePointerMove(e: React.PointerEvent) {
+    if (!dragging.current) return;
+    const steps = clientToSteps(e.clientX, e.clientY);
+    if (!steps) return;
+    setDragPos(steps);
+    // Throttle motor commands to ~10/s, using replace to retarget mid-flight
+    const now = Date.now();
+    if (now - lastSend.current >= 100) {
+      lastSend.current = now;
+      if (lr) moveMotor(lr.index, steps.lr, true);
+      if (fb) moveMotor(fb.index, steps.fb, true);
+    }
+  }
+
+  function handlePointerUp(e: React.PointerEvent) {
+    if (!dragging.current) return;
+    dragging.current = false;
+    // Always send final position with replace
+    const steps = clientToSteps(e.clientX, e.clientY);
+    if (steps) {
+      if (lr) moveMotor(lr.index, steps.lr, true);
+      if (fb) moveMotor(fb.index, steps.fb, true);
+    }
+    setDragPos(null);
+  }
 
   return (
-    <svg viewBox="-180 -260 340 340" className="w-full" style={{ maxHeight: "400px" }}>
+    <svg ref={svgRef} viewBox="-180 -260 340 340" className="w-full"
+      style={{ maxHeight: "400px", touchAction: "none", WebkitUserSelect: "none", userSelect: "none", WebkitTouchCallout: "none" } as React.CSSProperties}
+      onPointerMove={handlePointerMove} onPointerUp={handlePointerUp}>
       {/* Feet and legs (drawn first, behind base) */}
       {(() => {
         const fill = "#b5bcc3";
@@ -289,6 +388,36 @@ export function AutosamplerView({ motors }: Props) {
         );
       })()}
 
+      {/* Ghost head at target position (seamless L-shape) */}
+      {showGhost && (() => {
+        const gf = "#93c5fd", gs = "#3b82f6", gsw = 1;
+        const x = ghostX, y = ghostY, z = headZ, w = headW, d = headD, h = headH;
+        const tD = 4.5 * INCH, tH = 8 * INCH;
+        const tY = y + d - tD, tZ = z + h + tH;
+        return (
+          <g opacity={0.5}>
+            {/* Back top face (lower exposed) */}
+            <polygon points={pts([iso(x, y, z+h), iso(x+w, y, z+h), iso(x+w, tY, z+h), iso(x, tY, z+h)])}
+              fill={gf} stroke={gs} strokeWidth={gsw} strokeLinejoin="round" />
+            {/* Inner step wall */}
+            <polygon points={pts([iso(x, tY, tZ), iso(x+w, tY, tZ), iso(x+w, tY, z+h), iso(x, tY, z+h)])}
+              fill={darken(gf, 0.7)} stroke={gs} strokeWidth={gsw} strokeLinejoin="round" />
+            {/* Upper top face */}
+            <polygon points={pts([iso(x, tY, tZ), iso(x+w, tY, tZ), iso(x+w, y+d, tZ), iso(x, y+d, tZ)])}
+              fill={gf} stroke={gs} strokeWidth={gsw} strokeLinejoin="round" />
+            {/* Right face (L-shaped) */}
+            <polygon points={pts([iso(x+w, y, z+h), iso(x+w, tY, z+h), iso(x+w, tY, tZ), iso(x+w, y+d, tZ), iso(x+w, y+d, z), iso(x+w, y, z)])}
+              fill={darken(gf, 0.78)} stroke={gs} strokeWidth={gsw} strokeLinejoin="round" />
+            {/* Front face */}
+            <polygon points={pts([iso(x, y+d, tZ), iso(x+w, y+d, tZ), iso(x+w, y+d, z), iso(x, y+d, z)])}
+              fill={darken(gf, 0.62)} stroke={gs} strokeWidth={gsw} strokeLinejoin="round" />
+          </g>
+        );
+      })()}
+
+      {/* Draggable head assembly (LR + FB via pointer drag) */}
+      <g style={{ cursor: "grab", userSelect: "none", WebkitUserSelect: "none" } as React.CSSProperties}
+        onPointerDown={handlePointerDown}>
       {/* UD slider (drawn before head so head renders on top where they overlap) */}
       {(() => {
         const udW = 1.5 * INCH;
@@ -297,7 +426,7 @@ export function AutosamplerView({ motors }: Props) {
         const udTravel = 7.75 * INCH;
         const udX = headX + (headW - udW) / 2; // centered in head width
         const udY = headY + headD - 2 * INCH - udD; // front face 2" behind head front
-        const udZ = headZ - (udPos / 2000) * udTravel; // slides down as UD increases
+        const udZ = headZ - (udPos / udRange) * udTravel; // slides down as UD increases
         // Stepper motor on front of slider
         const mtrW = 1.4 * INCH;
         const mtrD = 1.4 * INCH;
@@ -308,7 +437,7 @@ export function AutosamplerView({ motors }: Props) {
         // Syringe cylinder below stepper motor
         const cylR = 0.125 * INCH; // 1/4" diameter = 1/8" radius
         const cylMaxH = 2.75 * INCH;
-        const cylH = (syringePos / 2000) * cylMaxH;
+        const cylH = (syringePos / plRange) * cylMaxH;
         const cylCX = udX + udW / 2; // centered on slider width
         const cylCY = udY + udD + 0.125 * INCH + cylR; // 1/8" from slider front + radius
         const cylZ = mtrZ - cylH; // extends downward from motor bottom
@@ -440,6 +569,7 @@ export function AutosamplerView({ motors }: Props) {
           </g>
         );
       })()}
+      </g>{/* end draggable head assembly */}
     </svg>
   );
 }

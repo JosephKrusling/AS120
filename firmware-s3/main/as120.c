@@ -50,6 +50,58 @@ void as120_enqueue_action(as120_t *dev, action_t action)
     dev->last_action = a;
 }
 
+// Remove all pending actions for a specific motor from the queue.
+static void remove_pending_for_motor(as120_t *dev, uint8_t motor_idx)
+{
+    action_t **prev = &dev->next_action;
+    action_t *curr = dev->next_action;
+    while (curr != NULL) {
+        if (curr->motor_idx == motor_idx) {
+            *prev = curr->next;
+            free(curr);
+            curr = *prev;
+        } else {
+            prev = &curr->next;
+            curr = curr->next;
+        }
+    }
+    // Fix tail pointer
+    if (dev->next_action == NULL) {
+        dev->last_action = NULL;
+    } else {
+        action_t *tail = dev->next_action;
+        while (tail->next != NULL) tail = tail->next;
+        dev->last_action = tail;
+    }
+}
+
+// Replace: retarget in-flight if same motor is active, otherwise replace queued.
+// This avoids queue buildup during continuous positioning (e.g. drag-to-move).
+void as120_replace_action(as120_t *dev, action_t action)
+{
+    // Resolve to absolute target
+    int64_t target = action.target;
+    if (action.type == ACTION_INCREMENT)
+        target = dev->motors[action.motor_idx].stepper.position + action.target;
+    else if (action.type == ACTION_DECREMENT)
+        target = dev->motors[action.motor_idx].stepper.position - action.target;
+
+    // If this motor is currently moving, just retarget mid-flight
+    if (dev->current_action != NULL && dev->current_action->motor_idx == action.motor_idx) {
+        dev->motors[action.motor_idx].stepper.target = target;
+        dev->current_action->target = target;
+        dev->current_action->type = ACTION_ABSOLUTE;
+        remove_pending_for_motor(dev, action.motor_idx);
+        return;
+    }
+
+    // Otherwise, remove any pending for this motor and enqueue one
+    remove_pending_for_motor(dev, action.motor_idx);
+    action.target = target;
+    action.type = ACTION_ABSOLUTE;
+    as120_enqueue_action(dev, action);
+}
+
 void as120_clear_queue(as120_t *dev)
 {
     // Stop current motion
@@ -151,7 +203,9 @@ void as120_process_next_action(as120_t *dev)
     tca9535_set_output_pin(motor->gpio, motor->gpio_pin_disabled, 0, false);
     tca9535_set_output_pin(motor->gpio, motor->gpio_pin_drv_en, 1, false);
 
-    // Set microstepping mode
+    // Set microstepping mode (DRV8834 truth table)
+    // Ensure M0 is output (may have been hi-Z for 1/8 step)
+    tca9535_set_pin_direction(motor->gpio, motor->gpio_pin_drv_m0, false, true);
     switch (stepper->step_size) {
         case STEP_SIZE_FULL:
             tca9535_set_output_pin(motor->gpio, motor->gpio_pin_drv_m0, 0, false);
@@ -166,9 +220,9 @@ void as120_process_next_action(as120_t *dev)
             tca9535_set_output_pin(motor->gpio, motor->gpio_pin_drv_m1, 1, true);
             break;
         case STEP_SIZE_EIGHTH:
-            // TODO: m1=0 and m0 should float (configure as input)
-            tca9535_set_output_pin(motor->gpio, motor->gpio_pin_drv_m0, 1, false);
-            tca9535_set_output_pin(motor->gpio, motor->gpio_pin_drv_m1, 1, true);
+            // M0 must float (hi-Z) for 1/8 step on DRV8834
+            tca9535_set_pin_direction(motor->gpio, motor->gpio_pin_drv_m0, true, true);
+            tca9535_set_output_pin(motor->gpio, motor->gpio_pin_drv_m1, 0, true);
             break;
         case STEP_SIZE_SIXTEENTH:
             tca9535_set_output_pin(motor->gpio, motor->gpio_pin_drv_m0, 1, false);
@@ -457,6 +511,7 @@ int as120_get_status_json(const as120_t *dev, char *buf, size_t buf_size)
         cJSON_AddNumberToObject(motor, "position", (double)m->stepper.position);
         cJSON_AddNumberToObject(motor, "target", (double)m->stepper.target);
         cJSON_AddBoolToObject(motor, "is_home", m->is_home);
+        cJSON_AddBoolToObject(motor, "home_switch", m->home_switch);
         cJSON_AddNumberToObject(motor, "speed_min", (double)m->stepper.speed_min);
         cJSON_AddNumberToObject(motor, "speed_max", (double)m->stepper.speed_max);
         cJSON_AddNumberToObject(motor, "max_acceleration", (double)m->stepper.max_acceleration);

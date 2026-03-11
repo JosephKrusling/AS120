@@ -84,11 +84,13 @@ export class HttpTransport implements Transport {
     return res.json();
   }
 
-  async moveMotor(index: number, position: number): Promise<void> {
+  async moveMotor(index: number, position: number, replace?: boolean): Promise<void> {
+    const body: Record<string, unknown> = { position };
+    if (replace) body.replace = true;
     const res = await this.loggedFetch(`/api/motor/${index}/move`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ position }),
+      body: JSON.stringify(body),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
   }

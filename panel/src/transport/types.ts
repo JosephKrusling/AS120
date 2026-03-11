@@ -4,6 +4,7 @@ export interface MotorStatus {
   position: number;
   target: number;
   is_home: boolean;
+  home_switch: boolean;
   speed_min: number;
   speed_max: number;
   max_acceleration: number;
@@ -94,7 +95,7 @@ export interface Transport {
   connect(): Promise<void>;
   disconnect(): Promise<void>;
   getStatus(): Promise<AS120Status>;
-  moveMotor(index: number, position: number): Promise<void>;
+  moveMotor(index: number, position: number, replace?: boolean): Promise<void>;
   jogMotor(index: number, steps: number): Promise<void>;
   homeMotor(index: number): Promise<void>;
   homeAll(): Promise<void>;

@@ -13,6 +13,8 @@ import {
   Settings,
 } from "lucide-react";
 
+const FULL_STEP_RANGE: Record<string, number> = { LR: 2250, FB: 500, UD: 500, PL: 500 };
+
 const MOTOR_LABELS: Record<string, string> = {
   FB: "Forward / Back",
   UD: "Up / Down",
@@ -75,14 +77,22 @@ export function MotorCard({ motor }: MotorCardProps) {
     setPendingConfig(null);
   }, [pendingConfig, motor.index, setMotorConfig]);
 
-  const jogButtons = [-100, -10, -1, 1, 10, 100];
-
   return (
     <Card>
       <CardContent className="space-y-2 px-3 py-2">
         {/* Label, position, input, go, home — all one row */}
         <div className="flex items-center gap-1.5">
           <span className="text-sm font-bold shrink-0 w-6">{motor.name}</span>
+          <span
+            className={`h-2 w-2 shrink-0 rounded-full ${
+              motor.is_home
+                ? "bg-green-400 shadow-[0_0_4px_theme(colors.green.400)]"
+                : motor.home_switch
+                  ? "bg-yellow-400 shadow-[0_0_4px_theme(colors.yellow.400)]"
+                  : "bg-zinc-600"
+            }`}
+            title={motor.is_home ? "Homed" : motor.home_switch ? "Switch triggered" : "Not homed"}
+          />
           <span className="text-[11px] text-muted-foreground shrink-0">=</span>
           <span className="font-mono text-lg font-bold tabular-nums shrink-0 w-16">
             {motor.position}
@@ -90,41 +100,43 @@ export function MotorCard({ motor }: MotorCardProps) {
           <span className="ml-auto" />
           <Input
             type="number"
+            inputMode="numeric"
+            pattern="[0-9]*"
             placeholder="Go to position"
             value={targetPosition}
             onChange={(e) => setTargetPosition(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleGo()}
-            className="font-mono h-7 text-xs w-36 shrink-0"
+            className="font-mono h-10 text-sm w-40 shrink-0"
           />
           <Button
             variant="secondary"
             size="sm"
-            className="h-7 text-xs px-2 shrink-0"
+            className="h-10 text-sm px-3 shrink-0"
             onClick={handleGo}
             disabled={targetPosition === ""}
           >
-            <ArrowRight className="mr-1 h-3 w-3" />
+            <ArrowRight className="mr-1 h-4 w-4" />
             Go
           </Button>
           <Button
             variant="outline"
             size="icon"
-            className="h-7 w-7 shrink-0"
+            className="h-10 w-10 shrink-0"
             onClick={() => setSettingsOpen(!settingsOpen)}
             title="Settings"
           >
-            <Settings className="h-3 w-3" />
+            <Settings className="h-4 w-4" />
           </Button>
         </div>
 
         {/* Jog buttons with home button between -1 and +1 */}
-        <div className="grid grid-cols-7 gap-1">
-          {[-100, -10, -1].map((steps) => (
+        <div className="grid grid-cols-9 gap-1.5">
+          {[-1000, -100, -10, -1].map((steps) => (
             <Button
               key={steps}
               variant="outline"
               size="sm"
-              className="font-mono text-[10px] h-6 px-1"
+              className="font-mono text-xs h-10 px-1"
               onClick={() => handleJog(steps)}
             >
               {steps}
@@ -133,18 +145,18 @@ export function MotorCard({ motor }: MotorCardProps) {
           <Button
             variant="outline"
             size="sm"
-            className={`h-6 px-1 ${motor.is_home ? "text-green-400 border-green-500/30" : "text-yellow-400 border-yellow-500/30"}`}
+            className={`h-10 px-1 ${motor.is_home ? "text-green-400 border-green-500/30" : "text-yellow-400 border-yellow-500/30"}`}
             onClick={handleHome}
             title="Home"
           >
-            <Home className="h-3 w-3" />
+            <Home className="h-4 w-4" />
           </Button>
-          {[1, 10, 100].map((steps) => (
+          {[1, 10, 100, 1000].map((steps) => (
             <Button
               key={steps}
               variant="outline"
               size="sm"
-              className="font-mono text-[10px] h-6 px-1"
+              className="font-mono text-xs h-10 px-1"
               onClick={() => handleJog(steps)}
             >
               +{steps}
@@ -161,7 +173,7 @@ export function MotorCard({ motor }: MotorCardProps) {
           <div className="relative z-10 w-full max-w-sm space-y-4 rounded-xl border border-border bg-card p-4 shadow-lg">
             <div className="flex items-center justify-between">
               <span className="text-sm font-semibold">{motor.name} Settings</span>
-              <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setSettingsOpen(false)}>
+              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setSettingsOpen(false)}>
                 &times;
               </Button>
             </div>
@@ -194,12 +206,31 @@ export function MotorCard({ motor }: MotorCardProps) {
             </div>
 
             <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <Label className="text-xs">Step Size</Label>
-                <span className="font-mono text-xs text-muted-foreground">{config.step_size}</span>
+              <Label className="text-xs">Microstepping</Label>
+              <div className="grid grid-cols-5 gap-1">
+                {([
+                  [1, "Full"],
+                  [2, "1/2"],
+                  [3, "1/4"],
+                  [4, "1/8"],
+                  [5, "1/16"],
+                ] as [number, string][]).map(([val, label]) => (
+                  <Button
+                    key={val}
+                    variant={config.step_size === val ? "default" : "outline"}
+                    size="sm"
+                    className="h-9 text-xs px-2"
+                    onClick={() => handleConfigChange("step_size", val)}
+                  >
+                    {label}
+                  </Button>
+                ))}
               </div>
-              <Slider min={1} max={32} step={1} value={config.step_size}
-                onValueChange={(v) => handleConfigChange("step_size", v)} />
+              <div className="flex justify-between text-[9px] text-muted-foreground leading-tight">
+                <span>Fastest<br/>Most Torque</span>
+                <span className="text-center">0 – {((FULL_STEP_RANGE[motor.name] ?? 500) * (1 << (config.step_size - 1))).toLocaleString()} steps</span>
+                <span className="text-right">Smoothest<br/>Least Torque</span>
+              </div>
             </div>
 
             {pendingConfig && (

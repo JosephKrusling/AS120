@@ -7,9 +7,9 @@ export function useAS120() {
     useTransport();
 
   const moveMotor = useCallback(
-    async (index: number, position: number) => {
+    async (index: number, position: number, replace?: boolean) => {
       if (!transport) return;
-      await transport.moveMotor(index, position);
+      await transport.moveMotor(index, position, replace);
     },
     [transport]
   );

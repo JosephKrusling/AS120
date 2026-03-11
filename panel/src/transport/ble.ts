@@ -136,7 +136,7 @@ export class BleTransport implements Transport {
     });
   }
 
-  async moveMotor(index: number, position: number): Promise<void> {
+  async moveMotor(index: number, position: number, _replace?: boolean): Promise<void> {
     await this.sendCommand({ cmd: "move", motor: index, position });
   }
 

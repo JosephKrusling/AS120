@@ -32,16 +32,18 @@ typedef enum {
 #define I2C_MAX_RETRIES     5
 #define I2C_RETRY_DELAY_MS  10
 
-// === GPIO Pin Assignments (ESP32-S3)
-// These will need to be updated to match your bodge wiring.
-// The S3 has GPIOs 0-48. Pins 26-32 are typically used for SPI flash/PSRAM
-// on modules with octal PSRAM, so avoid those.
-static const gpio_num_t PIN_STEP      = GPIO_NUM_35;
-static const gpio_num_t PIN_STEP_EXP  = GPIO_NUM_38;
-static const gpio_num_t PIN_DIR       = GPIO_NUM_34;
-static const gpio_num_t PIN_DIR_EXP   = GPIO_NUM_36;
-static const gpio_num_t PIN_HOME      = GPIO_NUM_33;
-static const gpio_num_t PIN_HOME_EXP  = GPIO_NUM_37;
+// === GPIO Pin Assignments
+// Target board: ESP32-S3-DevKitC-1 v1.0 with ESP32-S3-WROOM-1-N16R8 module
+// (16MB flash, 8MB octal PSRAM). Bodge-wired into S2-MINI-2U PCB socket.
+// On N16R8 (octal PSRAM), GPIO 26-37 are unavailable:
+//   26-32: SPI flash, 33-37: PSRAM (and 33-34 not on DevKitC-1 headers)
+// Motor control pins remapped to GPIO 4-7, 15 (all on J1 header).
+static const gpio_num_t PIN_STEP      = GPIO_NUM_6;   // was 35, now J1 pin 6
+static const gpio_num_t PIN_STEP_EXP  = GPIO_NUM_38;  // unchanged, J3 pin 10
+static const gpio_num_t PIN_DIR       = GPIO_NUM_5;   // was 34, now J1 pin 5
+static const gpio_num_t PIN_DIR_EXP   = GPIO_NUM_7;   // was 36, now J1 pin 7
+static const gpio_num_t PIN_HOME      = GPIO_NUM_4;   // was 33, now J1 pin 4
+static const gpio_num_t PIN_HOME_EXP  = GPIO_NUM_15;  // was 37, now J1 pin 8
 
 static const gpio_num_t PIN_I2C_SDA   = GPIO_NUM_21;
 static const gpio_num_t PIN_I2C_SCL   = GPIO_NUM_20;

@@ -19,6 +19,7 @@
 #include "wifi.h"
 #include "http_server.h"
 #include "ble_server.h"
+#include "rgb_led.h"
 
 #define TAG "as120"
 
@@ -79,7 +80,7 @@ static int fw_log_vprintf(const char *fmt, va_list args)
 
 static void init_gpio(void)
 {
-    gpio_set_direction(PIN_STATUS_LED, GPIO_MODE_OUTPUT);
+    // PIN_STATUS_LED is driven by RMT (rgb_led.c), not GPIO
     gpio_set_direction(PIN_STEP, GPIO_MODE_OUTPUT);
     gpio_set_direction(PIN_STEP_EXP, GPIO_MODE_OUTPUT);
     gpio_set_direction(PIN_DIR, GPIO_MODE_OUTPUT);
@@ -88,6 +89,8 @@ static void init_gpio(void)
     gpio_set_direction(PIN_I2C_SCL, GPIO_MODE_OUTPUT_OD);
     gpio_set_direction(PIN_HOME, GPIO_MODE_INPUT);
     gpio_set_pull_mode(PIN_HOME, GPIO_PULLUP_ONLY);
+    gpio_set_direction(PIN_HOME_EXP, GPIO_MODE_INPUT);
+    gpio_set_pull_mode(PIN_HOME_EXP, GPIO_PULLUP_ONLY);
 }
 
 static uart_port_t init_uart(void)
@@ -258,6 +261,7 @@ void app_main(void)
     ESP_LOGI(TAG, "Reset reason: %d", esp_reset_reason());
 
     init_gpio();
+    rgb_led_init();
     uart_port_t uart = init_uart();
     i2c_master_bus_handle_t i2c_bus = init_i2c();
     init_nvs();
@@ -281,7 +285,7 @@ void app_main(void)
     };
 
     // Main loop
-    bool led_state = false;
+    uint8_t led_tick = 0;
     uint8_t cmd_buf[4];
     int cmd_len = 0;
 
@@ -347,9 +351,20 @@ void app_main(void)
             break;
         }
 
-        // Blink status LED
-        led_state = !led_state;
-        gpio_set_level(PIN_STATUS_LED, led_state);
+        // LED status: orange blink when moving, green heartbeat when idle
+        // (skip when OTA blink task owns the LED)
+        if (!rgb_led_is_override()) {
+            if (g_as120.active_motor_index >= 0) {
+                led_tick = (led_tick + 1) % 5;
+                if (led_tick == 0) rgb_led_set(20, 6, 0);
+                else if (led_tick == 2) rgb_led_off();
+            } else {
+                // Green heartbeat: 250ms on, 750ms off (10 ticks = 1s)
+                led_tick = (led_tick + 1) % 10;
+                if (led_tick == 0) rgb_led_set(0, 8, 0);
+                else if (led_tick == 2) rgb_led_off();
+            }
+        }
 
         vTaskDelay(10);
     }

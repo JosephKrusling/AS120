@@ -154,6 +154,7 @@ typedef struct {
 extern as120_t g_as120;
 
 void as120_enqueue_action(as120_t *dev, action_t action);
+void as120_replace_action(as120_t *dev, action_t action);
 void as120_clear_queue(as120_t *dev);
 void as120_process_next_action(as120_t *dev);
 void as120_handle_command(as120_t *dev, uint8_t command[4]);

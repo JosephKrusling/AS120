@@ -10,7 +10,9 @@
 #include <esp_http_server.h>
 #include <esp_spiffs.h>
 #include <esp_partition.h>
+#include <esp_ota_ops.h>
 #include <esp_system.h>
+#include "rgb_led.h"
 #include <cJSON.h>
 
 #define TAG "httpd"
@@ -264,7 +266,11 @@ static esp_err_t api_motor_handler(httpd_req_t *req)
             .target = (int64_t)pos->valuedouble,
             .next = NULL,
         };
-        as120_enqueue_action(&g_as120, a);
+        cJSON *replace = cJSON_GetObjectItem(json, "replace");
+        if (cJSON_IsTrue(replace))
+            as120_replace_action(&g_as120, a);
+        else
+            as120_enqueue_action(&g_as120, a);
 
     } else if (strcmp(action, "jog") == 0) {
         cJSON *steps = cJSON_GetObjectItem(json, "steps");
@@ -495,6 +501,7 @@ static esp_err_t api_ota_spiffs_handler(httpd_req_t *req)
     }
 
     ESP_LOGI(TAG, "SPIFFS OTA: receiving %d bytes", total_len);
+    rgb_led_rainbow_start();
 
     // Unmount SPIFFS before erasing
     esp_vfs_spiffs_unregister(NULL);
@@ -545,6 +552,96 @@ static esp_err_t api_ota_spiffs_handler(httpd_req_t *req)
     httpd_resp_sendstr(req, "{\"ok\":true,\"message\":\"SPIFFS updated, rebooting...\"}");
 
     // Reboot after a short delay to let the response send
+    vTaskDelay(pdMS_TO_TICKS(500));
+    esp_restart();
+
+    return ESP_OK; // unreachable
+}
+
+// ---------------------------------------------------------------------------
+// API: Firmware OTA (app update via HTTP)
+// ---------------------------------------------------------------------------
+
+static esp_err_t api_ota_firmware_handler(httpd_req_t *req)
+{
+    set_cors_headers(req);
+    httpd_resp_set_type(req, "application/json");
+
+    int total_len = req->content_len;
+    if (total_len <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "{\"error\":\"empty body\"}");
+        return ESP_FAIL;
+    }
+
+    const esp_partition_t *update_partition = esp_ota_get_next_update_partition(NULL);
+    if (update_partition == NULL) {
+        ESP_LOGE(TAG, "No OTA partition found");
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "{\"error\":\"no OTA partition\"}");
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG, "Firmware OTA: writing to '%s' at 0x%lx (%d bytes)",
+             update_partition->label, (unsigned long)update_partition->address, total_len);
+    rgb_led_rainbow_start();
+
+    esp_ota_handle_t ota_handle;
+    esp_err_t err = esp_ota_begin(update_partition, total_len, &ota_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_begin failed: %s", esp_err_to_name(err));
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "{\"error\":\"ota begin failed\"}");
+        return ESP_FAIL;
+    }
+
+    char *buf = malloc(4096);
+    if (buf == NULL) {
+        esp_ota_abort(ota_handle);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "{\"error\":\"out of memory\"}");
+        return ESP_FAIL;
+    }
+
+    int received = 0;
+    while (received < total_len) {
+        int ret = httpd_req_recv(req, buf, 4096);
+        if (ret <= 0) {
+            if (ret == HTTPD_SOCK_ERR_TIMEOUT) continue;
+            ESP_LOGE(TAG, "Receive error at offset %d", received);
+            free(buf);
+            esp_ota_abort(ota_handle);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "{\"error\":\"receive failed\"}");
+            return ESP_FAIL;
+        }
+
+        err = esp_ota_write(ota_handle, buf, ret);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "esp_ota_write failed at offset %d: %s", received, esp_err_to_name(err));
+            free(buf);
+            esp_ota_abort(ota_handle);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "{\"error\":\"write failed\"}");
+            return ESP_FAIL;
+        }
+
+        received += ret;
+    }
+
+    free(buf);
+
+    err = esp_ota_end(ota_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_end failed: %s", esp_err_to_name(err));
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "{\"error\":\"image validation failed\"}");
+        return ESP_FAIL;
+    }
+
+    err = esp_ota_set_boot_partition(update_partition);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_set_boot_partition failed: %s", esp_err_to_name(err));
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "{\"error\":\"set boot partition failed\"}");
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG, "Firmware OTA: success, rebooting...");
+    httpd_resp_sendstr(req, "{\"ok\":true,\"message\":\"Firmware updated, rebooting...\"}");
+
     vTaskDelay(pdMS_TO_TICKS(500));
     esp_restart();
 
@@ -682,6 +779,13 @@ esp_err_t http_server_start(void)
         .handler = api_ota_spiffs_handler,
     };
     httpd_register_uri_handler(s_server, &ota_spiffs_uri);
+
+    httpd_uri_t ota_firmware_uri = {
+        .uri = "/api/ota/firmware",
+        .method = HTTP_POST,
+        .handler = api_ota_firmware_handler,
+    };
+    httpd_register_uri_handler(s_server, &ota_firmware_uri);
 
     httpd_uri_t reboot_uri = {
         .uri = "/api/reboot",

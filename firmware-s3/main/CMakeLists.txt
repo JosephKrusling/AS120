@@ -11,6 +11,7 @@ idf_component_register(
         "drivers/i2c_util.c"
         "drivers/dac7574.c"
         "drivers/tca9535.c"
+        "rgb_led.c"
     INCLUDE_DIRS "."
-    REQUIRES driver nvs_flash lua esp_wifi esp_http_server esp_netif bt spiffs json
+    REQUIRES driver nvs_flash lua esp_wifi esp_http_server esp_netif bt spiffs json app_update
 )
