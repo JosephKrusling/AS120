@@ -111,6 +111,19 @@ export function TransportProvider({ children }: { children: React.ReactNode }) {
     setError(null);
   }, [cleanup]);
 
+  // Auto-reconnect when connection is lost (but was previously connected)
+  const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!connected && error === "Connection lost" && !connecting) {
+      reconnectTimer.current = setTimeout(() => {
+        connect();
+      }, 2000);
+      return () => {
+        if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+      };
+    }
+  }, [connected, error, connecting, connect]);
+
   const handleSetTransportType = useCallback(
     (type: "http" | "ble") => {
       if (type !== transportType) {

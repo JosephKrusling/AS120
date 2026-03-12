@@ -2,8 +2,27 @@ import { useRef, useCallback, useState, useEffect } from "react";
 import { useAS120 } from "@/hooks/useAS120";
 import type { MotorStatus } from "@/transport/types";
 
+export interface TrayConfig {
+  x: number;           // back-left corner X, inches
+  y: number;           // back edge Y, inches
+  width: number;       // X extent, inches
+  depth: number;       // Y extent, inches
+  height: number;      // Z extent, inches
+  radius: number;      // corner fillet radius, inches
+  rows: number;        // grid rows (Y direction)
+  cols: number;        // grid columns (X direction)
+  rowPitch: number;    // row center-to-center spacing, inches
+  colPitch: number;    // column center-to-center spacing, inches
+  slotDiameter: number; // vial bore diameter, inches
+  z?: number;          // bottom face Z, inches (default 0)
+  color?: string;      // body color (default "#e8e8e8")
+}
+
 interface Props {
   motors: MotorStatus[];
+  fullscreen?: boolean;
+  trays?: TrayConfig[];
+  onTrayClick?: (index: number) => void;
 }
 
 function useSmoothValue(target: number, smoothing = 0.15): number {
@@ -151,7 +170,163 @@ function Box({ x, y, z, w, d, h, fill, stroke = "#555", sw = 0.8 }: {
   );
 }
 
-export function AutosamplerView({ motors }: Props) {
+const CORNER_SEGS = 8;
+const SLOT_SEGS = 16;
+
+function Tray({ config }: { config: TrayConfig }) {
+  const color = config.color ?? "#e8e8e8";
+  const sk = "#aaa";
+  const sw = 0.5;
+  const x = config.x * INCH, y = config.y * INCH, bz = (config.z ?? 0) * INCH;
+  const w = config.width * INCH, d = config.depth * INCH, h = config.height * INCH;
+  const zt = bz + h; // top z
+  const r = config.radius * INCH;
+  const rp = config.rowPitch * INCH, cp = config.colPitch * INCH;
+  const sr = (config.slotDiameter / 2) * INCH;
+
+  // Slot grid centers (centered in tray)
+  const gridW = (config.cols - 1) * cp;
+  const gridD = (config.rows - 1) * rp;
+  const gx0 = x + (w - gridW) / 2;
+  const gy0 = y + (d - gridD) / 2;
+  const slots: { cx: number; cy: number }[] = [];
+  for (let row = 0; row < config.rows; row++)
+    for (let col = 0; col < config.cols; col++)
+      slots.push({ cx: gx0 + col * cp, cy: gy0 + row * rp });
+
+  // Rounded rectangle outline at given z
+  function rrPts(z: number): [number, number][] {
+    const p: [number, number][] = [];
+    const N = CORNER_SEGS;
+    // Back-left corner: center (x+r, y+r), angles π → 3π/2
+    for (let i = 0; i <= N; i++) {
+      const θ = Math.PI + (Math.PI / 2) * (i / N);
+      p.push(iso(x + r + r * Math.cos(θ), y + r + r * Math.sin(θ), z));
+    }
+    p.push(iso(x + w - r, y, z));
+    // Back-right corner: center (x+w-r, y+r), angles -π/2 → 0
+    for (let i = 1; i <= N; i++) {
+      const θ = -Math.PI / 2 + (Math.PI / 2) * (i / N);
+      p.push(iso(x + w - r + r * Math.cos(θ), y + r + r * Math.sin(θ), z));
+    }
+    p.push(iso(x + w, y + d - r, z));
+    // Front-right corner: center (x+w-r, y+d-r), angles 0 → π/2
+    for (let i = 1; i <= N; i++) {
+      const θ = (Math.PI / 2) * (i / N);
+      p.push(iso(x + w - r + r * Math.cos(θ), y + d - r + r * Math.sin(θ), z));
+    }
+    p.push(iso(x + r, y + d, z));
+    // Front-left corner: center (x+r, y+d-r), angles π/2 → π
+    for (let i = 1; i <= N; i++) {
+      const θ = Math.PI / 2 + (Math.PI / 2) * (i / N);
+      p.push(iso(x + r + r * Math.cos(θ), y + d - r + r * Math.sin(θ), z));
+    }
+    p.push(iso(x, y + r, z));
+    return p;
+  }
+
+  function ptsPath(points: [number, number][]): string {
+    return points.map((p, i) => `${i === 0 ? "M" : "L"}${p[0]},${p[1]}`).join(" ") + " Z";
+  }
+
+  function slotEllipse(cx: number, cy: number, z: number): [number, number][] {
+    return Array.from({ length: SLOT_SEGS }, (_, i) => {
+      const θ = (2 * Math.PI * i) / SLOT_SEGS;
+      return iso(cx + sr * Math.cos(θ), cy + sr * Math.sin(θ), z);
+    });
+  }
+
+  // Quarter-cylinder corner strips
+  function cornerStrips(
+    cx: number, cy: number,
+    startθ: number, endθ: number,
+    shadeFn: (θ: number) => number,
+  ) {
+    const N = CORNER_SEGS;
+    return Array.from({ length: N }, (_, i) => {
+      const θ1 = startθ + ((endθ - startθ) * i) / N;
+      const θ2 = startθ + ((endθ - startθ) * (i + 1)) / N;
+      const x1 = cx + r * Math.cos(θ1), y1 = cy + r * Math.sin(θ1);
+      const x2 = cx + r * Math.cos(θ2), y2 = cy + r * Math.sin(θ2);
+      const shade = shadeFn((θ1 + θ2) / 2);
+      return (
+        <polygon key={`${cx}_${cy}_${i}`}
+          points={pts([iso(x1, y1, zt), iso(x2, y2, zt), iso(x2, y2, bz), iso(x1, y1, bz)])}
+          fill={darken(color, shade)} stroke="none" />
+      );
+    });
+  }
+
+  // Top face path with slot cutouts (evenodd)
+  const topPath = ptsPath(rrPts(zt)) + " " +
+    slots.map(s => ptsPath(slotEllipse(s.cx, s.cy, zt))).join(" ");
+
+  return (
+    <g>
+      {/* Back-right corner: -π/2 → 0 (back→right) */}
+      {cornerStrips(x + w - r, y + r, -Math.PI / 2, 0,
+        θ => 0.62 + 0.16 * Math.cos(θ))}
+      {/* Right face (flat portion) */}
+      <polygon points={pts([iso(x + w, y + r, zt), iso(x + w, y + d - r, zt),
+        iso(x + w, y + d - r, bz), iso(x + w, y + r, bz)])}
+        fill={darken(color, 0.78)} stroke={sk} strokeWidth={sw} strokeLinejoin="round" />
+      {/* Front-right corner: 0 → π/2 (right→front) */}
+      {cornerStrips(x + w - r, y + d - r, 0, Math.PI / 2,
+        θ => 0.78 - 0.16 * Math.sin(θ))}
+      {/* Front-left corner: π/2 → π (front→left) */}
+      {cornerStrips(x + r, y + d - r, Math.PI / 2, Math.PI,
+        θ => 0.62 - 0.16 * Math.sin(θ - Math.PI / 2))}
+      {/* Front face (flat portion) */}
+      <polygon points={pts([iso(x + r, y + d, zt), iso(x + w - r, y + d, zt),
+        iso(x + w - r, y + d, bz), iso(x + r, y + d, bz)])}
+        fill={darken(color, 0.62)} stroke={sk} strokeWidth={sw} strokeLinejoin="round" />
+      {/* Slot interiors (dark bores) */}
+      {slots.map((s, i) => (
+        <polygon key={`s${i}`} points={pts(slotEllipse(s.cx, s.cy, zt))}
+          fill="#1a1a1a" stroke="#333" strokeWidth={0.3} />
+      ))}
+      {/* Top face with slot cutouts */}
+      <path d={topPath} fillRule="evenodd"
+        fill={color} stroke={sk} strokeWidth={sw} strokeLinejoin="round" />
+    </g>
+  );
+}
+
+function Arm({ x, w, thick, startY, startZ, endY, endZ }: {
+  x: number; w: number; thick: number;
+  startY: number; startZ: number; endY: number; endZ: number;
+}) {
+  const N = 16;
+  const span = Math.hypot(endY - startY, endZ - startZ);
+  const sag = span * 0.25;
+  const fill = "#e8e8e8";
+  const cy = (t: number) => startY + (endY - startY) * t;
+  const cz = (t: number) => startZ + (endZ - startZ) * t - sag * Math.sin(Math.PI * t);
+
+  const topL: [number, number][] = [];
+  const topR: [number, number][] = [];
+  const sideT: [number, number][] = [];
+  const sideB: [number, number][] = [];
+  for (let i = 0; i <= N; i++) {
+    const t = i / N;
+    const py = cy(t), pz = cz(t);
+    topL.push(iso(x, py, pz + thick));
+    topR.push(iso(x + w, py, pz + thick));
+    sideT.push(iso(x + w, py, pz + thick));
+    sideB.push(iso(x + w, py, pz));
+  }
+
+  return (
+    <g>
+      <polygon points={pts([...topL, ...[...topR].reverse()])}
+        fill={fill} stroke="#777" strokeWidth={0.3} strokeLinejoin="round" />
+      <polygon points={pts([...sideT, ...[...sideB].reverse()])}
+        fill={darken(fill, 0.78)} stroke="#777" strokeWidth={0.3} strokeLinejoin="round" />
+    </g>
+  );
+}
+
+export function AutosamplerView({ motors, fullscreen, trays = [], onTrayClick }: Props) {
   const lr = motors.find((m) => m.name === "LR");
   const fb = motors.find((m) => m.name === "FB");
   const ud = motors.find((m) => m.name === "UD");
@@ -172,8 +347,18 @@ export function AutosamplerView({ motors }: Props) {
   const { moveMotor, status } = useAS120();
   const svgRef = useRef<SVGSVGElement>(null);
   const dragging = useRef(false);
+  const dragStart = useRef<{ lr: number; fb: number; motorLR: number; motorFB: number } | null>(null);
   const [dragPos, setDragPos] = useState<{ lr: number; fb: number } | null>(null);
   const lastSend = useRef(0);
+
+  // Vertical slider drag state
+  const draggingSlider = useRef<"ud" | "pl" | null>(null);
+  const [sliderDrag, setSliderDrag] = useState<{ axis: "ud" | "pl"; target: number } | null>(null);
+
+  // Slider layout constants (in SVG viewBox coords)
+  const sliderTY = -210, sliderBY = 50;
+  const sliderTH = sliderBY - sliderTY;
+  const udSliderX = -190, plSliderX = 180;
 
   // Base: 21" wide, 6" deep, 4" high
   const baseW = 21 * INCH;
@@ -228,8 +413,8 @@ export function AutosamplerView({ motors }: Props) {
   const ghostY = baseY + (ghostFB / fbRange) * fbTravel;
   const showGhost = Math.abs(ghostLR - lrPos) > 5 || Math.abs(ghostFB - fbPos) > 5;
 
-  // Convert client pointer position → motor step values
-  function clientToSteps(clientX: number, clientY: number) {
+  // Convert client pointer position → unclamped step values (for delta computation)
+  function clientToRawSteps(clientX: number, clientY: number) {
     const svg = svgRef.current;
     if (!svg) return null;
     const pt = svg.createSVGPoint();
@@ -240,48 +425,115 @@ export function AutosamplerView({ motors }: Props) {
     const svgPt = pt.matrixTransform(ctm.inverse());
     const [wx, wy] = isoInverse(svgPt.x, svgPt.y, headZ + headH / 2);
     return {
-      lr: Math.round(Math.max(0, Math.min(lrRange, ((baseX + headTravel - wx) / headTravel) * lrRange))),
-      fb: Math.round(Math.max(0, Math.min(fbRange, ((wy - baseY) / fbTravel) * fbRange))),
+      lr: ((baseX + headTravel - wx) / headTravel) * lrRange,
+      fb: ((wy - baseY) / fbTravel) * fbRange,
     };
+  }
+
+  // Convert client Y → SVG Y → step value for a slider
+  function clientToSliderSteps(clientX: number, clientY: number, range: number): number | null {
+    const svg = svgRef.current;
+    if (!svg) return null;
+    const pt = svg.createSVGPoint();
+    pt.x = clientX;
+    pt.y = clientY;
+    const ctm = svg.getScreenCTM();
+    if (!ctm) return null;
+    const svgY = pt.matrixTransform(ctm.inverse()).y;
+    return Math.round(Math.max(0, Math.min(range, ((svgY - sliderTY) / sliderTH) * range)));
+  }
+
+  function handleSliderDown(axis: "ud" | "pl", e: React.PointerEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    (e.target as Element).setPointerCapture(e.pointerId);
+    draggingSlider.current = axis;
+    const range = axis === "ud" ? udRange : plRange;
+    const steps = clientToSliderSteps(e.clientX, e.clientY, range);
+    if (steps != null) {
+      setSliderDrag({ axis, target: steps });
+      const motor = axis === "ud" ? ud : syringe;
+      if (motor) moveMotor(motor.index, steps, true);
+      lastSend.current = Date.now();
+    }
   }
 
   function handlePointerDown(e: React.PointerEvent) {
     e.preventDefault();
     (e.target as Element).setPointerCapture(e.pointerId);
     dragging.current = true;
-    const steps = clientToSteps(e.clientX, e.clientY);
-    if (steps) setDragPos(steps);
+    const raw = clientToRawSteps(e.clientX, e.clientY);
+    if (raw) {
+      dragStart.current = {
+        lr: raw.lr,
+        fb: raw.fb,
+        motorLR: lr?.position ?? 0,
+        motorFB: fb?.position ?? 0,
+      };
+    }
   }
 
   function handlePointerMove(e: React.PointerEvent) {
-    if (!dragging.current) return;
-    const steps = clientToSteps(e.clientX, e.clientY);
-    if (!steps) return;
-    setDragPos(steps);
-    // Throttle motor commands to ~10/s, using replace to retarget mid-flight
+    if (draggingSlider.current) {
+      const axis = draggingSlider.current;
+      const range = axis === "ud" ? udRange : plRange;
+      const steps = clientToSliderSteps(e.clientX, e.clientY, range);
+      if (steps != null) {
+        setSliderDrag({ axis, target: steps });
+        const now = Date.now();
+        if (now - lastSend.current >= 100) {
+          lastSend.current = now;
+          const motor = axis === "ud" ? ud : syringe;
+          if (motor) moveMotor(motor.index, steps, true);
+        }
+      }
+      return;
+    }
+    if (!dragging.current || !dragStart.current) return;
+    const raw = clientToRawSteps(e.clientX, e.clientY);
+    if (!raw) return;
+    const newLR = Math.round(Math.max(0, Math.min(lrRange, dragStart.current.motorLR + (raw.lr - dragStart.current.lr))));
+    const newFB = Math.round(Math.max(0, Math.min(fbRange, dragStart.current.motorFB + (raw.fb - dragStart.current.fb))));
+    setDragPos({ lr: newLR, fb: newFB });
     const now = Date.now();
     if (now - lastSend.current >= 100) {
       lastSend.current = now;
-      if (lr) moveMotor(lr.index, steps.lr, true);
-      if (fb) moveMotor(fb.index, steps.fb, true);
+      if (lr) moveMotor(lr.index, newLR, true);
+      if (fb) moveMotor(fb.index, newFB, true);
     }
   }
 
   function handlePointerUp(e: React.PointerEvent) {
+    if (draggingSlider.current) {
+      const axis = draggingSlider.current;
+      const range = axis === "ud" ? udRange : plRange;
+      const steps = clientToSliderSteps(e.clientX, e.clientY, range);
+      if (steps != null) {
+        const motor = axis === "ud" ? ud : syringe;
+        if (motor) moveMotor(motor.index, steps, true);
+      }
+      draggingSlider.current = null;
+      setSliderDrag(null);
+      return;
+    }
     if (!dragging.current) return;
     dragging.current = false;
-    // Always send final position with replace
-    const steps = clientToSteps(e.clientX, e.clientY);
-    if (steps) {
-      if (lr) moveMotor(lr.index, steps.lr, true);
-      if (fb) moveMotor(fb.index, steps.fb, true);
+    if (dragStart.current) {
+      const raw = clientToRawSteps(e.clientX, e.clientY);
+      if (raw) {
+        const newLR = Math.round(Math.max(0, Math.min(lrRange, dragStart.current.motorLR + (raw.lr - dragStart.current.lr))));
+        const newFB = Math.round(Math.max(0, Math.min(fbRange, dragStart.current.motorFB + (raw.fb - dragStart.current.fb))));
+        if (lr) moveMotor(lr.index, newLR, true);
+        if (fb) moveMotor(fb.index, newFB, true);
+      }
     }
+    dragStart.current = null;
     setDragPos(null);
   }
 
   return (
-    <svg ref={svgRef} viewBox="-180 -260 340 340" className="w-full"
-      style={{ maxHeight: "400px", touchAction: "none", WebkitUserSelect: "none", userSelect: "none", WebkitTouchCallout: "none" } as React.CSSProperties}
+    <svg ref={svgRef} viewBox="-210 -260 410 340" className={fullscreen ? "h-full w-full" : "w-full"}
+      style={{ maxHeight: fullscreen ? undefined : "400px", touchAction: "none", WebkitUserSelect: "none", userSelect: "none", WebkitTouchCallout: "none" } as React.CSSProperties}
       onPointerMove={handlePointerMove} onPointerUp={handlePointerUp}>
       {/* Feet and legs (drawn first, behind base) */}
       {(() => {
@@ -385,6 +637,112 @@ export function AutosamplerView({ motors }: Props) {
           >
             AS120
           </text>
+        );
+      })()}
+
+      {/* Trays + laser beam (interleaved for correct isometric occlusion) */}
+      {(() => {
+        const indexed = trays.map((t, i) => ({ t, origIdx: i }));
+        indexed.sort((a, b) => (a.t.x + a.t.y) - (b.t.x + b.t.y));
+        const sorted = indexed.map(e => e.t);
+        const armW = 0.3 * INCH, armThick = 0.15 * INCH, armInset = 0.5 * INCH;
+        const baseFrontY = baseY + baseD;
+
+        // Find what the laser hits: trays, legs, or feet
+        const activeLR = dragPos ? dragPos.lr : lrPos;
+        const activeFB = dragPos ? dragPos.fb : fbPos;
+        const needleX = baseX + headW / 2 + headTravel * (1 - activeLR / lrRange);
+        const needleY = baseY + headD + (activeFB / fbRange) * fbTravel - 2 * INCH;
+        let hitZ = 0, hitIdx = -1;
+        // Check trays
+        for (let i = 0; i < sorted.length; i++) {
+          const t = sorted[i];
+          const tx = t.x * INCH, tw = t.width * INCH;
+          const ty = t.y * INCH, td = t.depth * INCH;
+          const tz = ((t.z ?? 0) + t.height) * INCH;
+          if (needleX >= tx && needleX <= tx + tw && needleY >= ty && needleY <= ty + td) {
+            if (tz > hitZ) { hitZ = tz; hitIdx = i; }
+          }
+        }
+        // Check legs (boxes on top of feet)
+        const legYC = baseY + (baseD - legD) / 2;
+        const llx = baseX + 5 * INCH, rlx = baseX + baseW - 5 * INCH - legW;
+        for (const lx of [llx, rlx]) {
+          if (needleX >= lx && needleX <= lx + legW && needleY >= legYC && needleY <= legYC + legD) {
+            const topZ = footH + legH;
+            if (topZ > hitZ) { hitZ = topZ; hitIdx = -2; }
+          }
+        }
+        // Check feet (centered under each leg)
+        const lfx = llx + legW / 2 - footW / 2, rfx = rlx + legW / 2 - footW / 2;
+        const fyc = legYC + legD / 2 - footD / 2;
+        for (const fx of [lfx, rfx]) {
+          if (needleX >= fx && needleX <= fx + footW && needleY >= fyc && needleY <= fyc + footD) {
+            if (footH > hitZ) { hitZ = footH; hitIdx = -2; }
+          }
+        }
+
+        const laserEl = (
+          <g pointerEvents="none">
+            {(() => {
+              const [, topSY] = iso(needleX, needleY, headZ);
+              const [hx, hy] = iso(needleX, needleY, hitZ);
+              return (
+                <>
+                  <line x1={hx} y1={topSY} x2={hx} y2={hy}
+                    stroke="#ef4444" strokeWidth={6} strokeOpacity={0.08} />
+                  <line x1={hx} y1={topSY} x2={hx} y2={hy}
+                    stroke="#ef4444" strokeWidth={2.5} strokeOpacity={0.15} />
+                  <line x1={hx} y1={topSY} x2={hx} y2={hy}
+                    stroke="#f87171" strokeWidth={1} strokeOpacity={0.8} />
+                  <circle cx={hx} cy={hy} r={4} fill="#ef4444" fillOpacity={0.15} />
+                  <circle cx={hx} cy={hy} r={2} fill="#f87171" fillOpacity={0.4} />
+                  <circle cx={hx} cy={hy} r={0.8} fill="#fecaca" />
+                </>
+              );
+            })()}
+          </g>
+        );
+
+        // Insert laser at correct depth position
+        // If hit, insert after the hit tray. If no hit, insert based on isometric depth.
+        let insertAfter: number;
+        if (hitIdx >= 0) {
+          insertAfter = hitIdx;
+        } else if (dragPos) {
+          const laserDepth = (needleX + needleY) / INCH;
+          insertAfter = -1;
+          for (let i = 0; i < sorted.length; i++) {
+            if ((sorted[i].x + sorted[i].y) <= laserDepth) insertAfter = i;
+          }
+        } else {
+          insertAfter = -1;
+        }
+
+        function renderTray(t: TrayConfig, i: number) {
+          const tx = t.x * INCH, tw = t.width * INCH;
+          const tBackY = t.y * INCH;
+          const tTopZ = ((t.z ?? 0) + t.height) * INCH;
+          const origIdx = indexed[i].origIdx;
+          return (
+            <g key={i} onClick={onTrayClick ? () => onTrayClick(origIdx) : undefined}
+              style={onTrayClick ? { cursor: "pointer" } : undefined}>
+              <Arm x={tx + armInset} w={armW} thick={armThick}
+                startY={baseFrontY} startZ={baseZ - armThick} endY={tBackY} endZ={tTopZ - armThick} />
+              <Arm x={tx + tw - armInset - armW} w={armW} thick={armThick}
+                startY={baseFrontY} startZ={baseZ - armThick} endY={tBackY} endZ={tTopZ - armThick} />
+              <Tray config={t} />
+            </g>
+          );
+        }
+
+        return (
+          <>
+            {insertAfter === -1 && laserEl}
+            {sorted.map((t, i) => (
+              <>{renderTray(t, i)}{i === insertAfter && laserEl}</>
+            ))}
+          </>
         );
       })()}
 
@@ -518,8 +876,8 @@ export function AutosamplerView({ motors }: Props) {
             {/* Windows: 1.5" wide, 3.25" tall, 1" above head bottom, flush right + front */}
             {(() => {
               const winW = 1.5 * INCH;
-              const winH = 3.25 * INCH;
-              const winZ = z + 1 * INCH;
+              const winH = 3.75 * INCH;
+              const winZ = z + 0.5 * INCH;
               const winX = x + w - winW;
               const fy = y + d;
               const winD = 1.5 * INCH;
@@ -570,6 +928,63 @@ export function AutosamplerView({ motors }: Props) {
         );
       })()}
       </g>{/* end draggable head assembly */}
+
+      {/* Vertical sliders for UD (left) and PL (right) */}
+      {[
+        { axis: "ud" as const, cx: udSliderX, pos: udPos, range: udRange, color: "#10b981", light: "#6ee7b7", label: "UD" },
+        { axis: "pl" as const, cx: plSliderX, pos: syringePos, range: plRange, color: "#a855f7", light: "#c084fc", label: "PL" },
+      ].map(({ axis, cx, pos, range, color, light, label }) => {
+        const tw = 6, thW = 16, thH = 8;
+        const thumbY = sliderTY + (pos / range) * sliderTH;
+        const motor = axis === "ud" ? ud : syringe;
+        const dragTarget = sliderDrag?.axis === axis ? sliderDrag.target : null;
+        const queueTarget = motor ? finalQueueTarget(motor.index, motor.position) : null;
+        const ghostVal = dragTarget ?? queueTarget;
+        const showSliderGhost = ghostVal != null && Math.abs(ghostVal - pos) > 5;
+        const ghostY = ghostVal != null ? sliderTY + (ghostVal / range) * sliderTH : null;
+        return (
+          <g key={axis}>
+            {/* Track bg */}
+            <rect x={cx - tw / 2} y={sliderTY} width={tw} height={sliderTH}
+              rx={3} fill="#0b1120" stroke={color} strokeWidth={0.5} strokeOpacity={0.4} />
+            {/* Fill */}
+            <rect x={cx - tw / 2} y={sliderTY} width={tw} height={Math.max(0, thumbY - sliderTY)}
+              rx={3} fill={color} fillOpacity={0.2} />
+            {/* Tick marks */}
+            {[0, 0.25, 0.5, 0.75, 1].map((f) => (
+              <line key={f} x1={cx - tw / 2 - 2} y1={sliderTY + f * sliderTH} x2={cx - tw / 2} y2={sliderTY + f * sliderTH}
+                stroke={color} strokeWidth={0.4} strokeOpacity={0.5} />
+            ))}
+            {/* Ghost thumb at target */}
+            {showSliderGhost && ghostY != null && (
+              <rect x={cx - thW / 2} y={ghostY - thH / 2} width={thW} height={thH}
+                rx={4} fill={color} fillOpacity={0.3} stroke={light} strokeWidth={0.6} strokeOpacity={0.5} />
+            )}
+            {/* Hit area (wider for touch) */}
+            <rect x={cx - thW / 2 - 6} y={sliderTY - 12} width={thW + 12} height={sliderTH + 24}
+              fill="transparent" style={{ cursor: "ns-resize", touchAction: "none" } as React.CSSProperties}
+              onPointerDown={(e) => handleSliderDown(axis, e)} />
+            {/* Thumb */}
+            <rect x={cx - thW / 2} y={thumbY - thH / 2} width={thW} height={thH}
+              rx={4} fill={color} stroke={light} strokeWidth={0.8}
+              style={{ pointerEvents: "none" }} />
+            {/* Label */}
+            <text x={cx} y={sliderTY - 18} textAnchor="middle"
+              fontSize="11" fill={light} fontFamily="ui-monospace, monospace" fontWeight="700">{label}</text>
+            {/* Value */}
+            <text x={cx} y={sliderTY - 6} textAnchor="middle"
+              fontSize="11" fill={light} fontFamily="ui-monospace, monospace" fontWeight="600">
+              {dragTarget != null ? dragTarget : Math.round(pos)}
+            </text>
+            {/* Range labels */}
+            <text x={cx + tw / 2 + 3} y={sliderTY + 2} textAnchor="start"
+              fontSize="3.5" fill={color} fillOpacity={0.5} fontFamily="ui-monospace, monospace">0</text>
+            <text x={cx + tw / 2 + 3} y={sliderBY} textAnchor="start"
+              fontSize="3.5" fill={color} fillOpacity={0.5} fontFamily="ui-monospace, monospace">{range}</text>
+          </g>
+        );
+      })}
+
     </svg>
   );
 }

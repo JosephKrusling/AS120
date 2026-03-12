@@ -1,7 +1,7 @@
 import { TransportProvider } from "@/transport/context";
 import { useAS120 } from "@/hooks/useAS120";
 import { MotorCard } from "@/components/MotorCard";
-import { AutosamplerView } from "@/components/AutosamplerView";
+import { AutosamplerView, type TrayConfig } from "@/components/AutosamplerView";
 import { CommLog } from "@/components/CommLog";
 import { MotionQueue } from "@/components/MotionQueue";
 import { BleSetupWizard } from "@/components/BleSetupWizard";
@@ -18,6 +18,10 @@ import {
   ArrowRight,
   Radio,
   Home,
+  OctagonX,
+  Maximize2,
+  X,
+  RectangleVertical,
 } from "lucide-react";
 import { useState, useRef, useEffect, useCallback } from "react";
 
@@ -81,6 +85,13 @@ function ChooseMode({ onChoose }: { onChoose: (mode: AppMode) => void }) {
   );
 }
 
+const DEFAULT_TRAYS: TrayConfig[] = [
+  { x: -3.5, y: 5.5, z: 8.25, width: 3, depth: 4.5, height: 0.75, radius: 0.2,
+    rows: 6, cols: 4, rowPitch: 0.63, colPitch: 0.63, slotDiameter: 0.47 },
+  { x: 0.5, y: 5.5, z: 8.25, width: 3.5, depth: 3, height: 0.75, radius: 0.2,
+    rows: 3, cols: 4, rowPitch: 0.79, colPitch: 0.79, slotDiameter: 0.67 },
+];
+
 function WifiDashboard({ onBack, showBack = true }: { onBack: () => void; showBack?: boolean }) {
   const {
     status,
@@ -90,10 +101,15 @@ function WifiDashboard({ onBack, showBack = true }: { onBack: () => void; showBa
     connect,
     disconnect,
     homeAll,
+    clearQueue,
     wifiReset,
   } = useAS120();
 
   const [homing, setHoming] = useState(false);
+  const [trayModal, setTrayModal] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
+  const [trays, setTrays] = useState<TrayConfig[]>(DEFAULT_TRAYS);
+  const [selectedTray, setSelectedTray] = useState<number | null>(null);
   const homingUpdates = useRef(0);
   const handleHomeAll = useCallback(async () => {
     setHoming(true);
@@ -118,6 +134,10 @@ function WifiDashboard({ onBack, showBack = true }: { onBack: () => void; showBa
     const timeout = setTimeout(() => setHoming(false), 15000);
     return () => clearTimeout(timeout);
   }, [homing]);
+
+  const updateTray = useCallback((idx: number, key: keyof TrayConfig, value: number) => {
+    setTrays(prev => prev.map((t, i) => i === idx ? { ...t, [key]: value } : t));
+  }, []);
 
   const faultActive = status && status.fault_code !== 0;
 
@@ -257,10 +277,10 @@ function WifiDashboard({ onBack, showBack = true }: { onBack: () => void; showBa
   return (
     <div className="flex min-h-screen flex-col">
       {/* Header */}
-      <header className="border-b border-border bg-card px-4 py-3">
+      <header className="border-b border-blue-500/20 bg-gradient-to-r from-blue-950/60 to-card px-4 py-3">
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <h1 className="text-lg font-bold tracking-tight">AS120 Control Panel</h1>
+            <h1 className="text-lg font-bold tracking-tight text-blue-50">AS120 Control Panel</h1>
             <Badge variant="secondary" className="font-mono text-xs">
               v{status?.version}
             </Badge>
@@ -273,9 +293,18 @@ function WifiDashboard({ onBack, showBack = true }: { onBack: () => void; showBa
           </div>
           <Popover>
             <PopoverTrigger asChild>
-              <Badge variant="outline" className="gap-1.5 cursor-pointer hover:bg-accent">
-                <Wifi className="h-3 w-3 text-green-400" />
-                {status?.wifi?.ssid || "WiFi"}
+              <Badge variant={error ? "destructive" : "outline"} className="gap-1.5 cursor-pointer hover:bg-accent text-sm py-1 px-2.5">
+                {error ? (
+                  <>
+                    <WifiOff className="h-3.5 w-3.5" />
+                    Connection Lost
+                  </>
+                ) : (
+                  <>
+                    <Wifi className="h-3.5 w-3.5 text-green-400" />
+                    {status?.wifi?.ssid || "WiFi"}
+                  </>
+                )}
               </Badge>
             </PopoverTrigger>
             <PopoverContent align="end" className="w-56 p-2">
@@ -326,25 +355,51 @@ function WifiDashboard({ onBack, showBack = true }: { onBack: () => void; showBa
         {status && status.motors.length > 0 && (
           <div className="mx-auto max-w-6xl space-y-6 p-4">
             <div className="grid gap-4 lg:grid-cols-2">
-              <div className="relative rounded-xl border border-border bg-card p-4">
-                <AutosamplerView motors={status.motors} />
+              <div className="relative rounded-xl border border-border bg-gradient-to-b from-slate-900/80 to-card p-4">
+                <AutosamplerView motors={status.motors} trays={trays} onTrayClick={setSelectedTray} />
                 <Button
                   variant="outline"
-                  className={`absolute top-2 right-2 bg-card/80 backdrop-blur-sm transition-all duration-300 ${homing ? "h-8 px-3 gap-1.5" : "h-8 w-8 p-0"}`}
-                  onClick={handleHomeAll}
-                  disabled={homing}
-                  title="Home All Motors"
+                  className="absolute top-2 right-2 h-10 w-10 p-0 bg-card/80 backdrop-blur-sm"
+                  onClick={() => setFullscreen(true)}
+                  title="Fullscreen"
                 >
-                  <div className="relative h-4 w-4 shrink-0">
-                    <Home className={`h-4 w-4 absolute inset-0 transition-all duration-300 ${homing ? "opacity-0 scale-50" : "opacity-100 scale-100"}`} />
-                    <Loader2 className={`h-4 w-4 absolute inset-0 transition-all duration-300 ${homing ? "opacity-100 scale-100 animate-spin [animation-duration:2s]" : "opacity-0 scale-50"}`} />
-                  </div>
-                  <span className={`text-xs font-medium overflow-hidden transition-all duration-300 ${homing ? "max-w-20 opacity-100" : "max-w-0 opacity-0"}`}>
-                    Homing...
-                  </span>
+                  <Maximize2 className="h-5 w-5" />
                 </Button>
+                <Button
+                  variant="outline"
+                  className="absolute bottom-2 left-2 h-10 w-10 p-0 bg-card/80 backdrop-blur-sm"
+                  onClick={() => setTrayModal(true)}
+                  title="Trays"
+                >
+                  <RectangleVertical className="h-5 w-5" />
+                </Button>
+                <div className="absolute bottom-2 right-2 flex gap-2">
+                  <Button
+                    variant="outline"
+                    className={`bg-card/80 backdrop-blur-sm transition-all duration-300 ${homing ? "h-12 px-4 gap-2" : "h-12 w-12 p-0"}`}
+                    onClick={handleHomeAll}
+                    disabled={homing}
+                    title="Home All Motors"
+                  >
+                    <div className="relative h-6 w-6 shrink-0">
+                      <Home className={`h-6 w-6 absolute inset-0 transition-all duration-300 ${homing ? "opacity-0 scale-50" : "opacity-100 scale-100"}`} />
+                      <Loader2 className={`h-6 w-6 absolute inset-0 transition-all duration-300 ${homing ? "opacity-100 scale-100 animate-spin [animation-duration:2s]" : "opacity-0 scale-50"}`} />
+                    </div>
+                    <span className={`text-sm font-medium overflow-hidden transition-all duration-300 ${homing ? "max-w-24 opacity-100" : "max-w-0 opacity-0"}`}>
+                      Homing...
+                    </span>
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="h-12 w-12 p-0 bg-red-950/80 border-red-500/40 hover:bg-red-900/80 backdrop-blur-sm"
+                    onClick={clearQueue}
+                    title="Emergency Stop — Clear Queue"
+                  >
+                    <OctagonX className="h-6 w-6 text-red-400" />
+                  </Button>
+                </div>
               </div>
-              <div className="flex flex-col gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-4">
                 {status.motors.map((motor) => (
                   <MotorCard key={motor.index} motor={motor} />
                 ))}
@@ -354,6 +409,134 @@ function WifiDashboard({ onBack, showBack = true }: { onBack: () => void; showBa
             <CommLog />
           </div>
         )}
+
+        {/* Fullscreen visualizer modal */}
+        {fullscreen && status && status.motors.length > 0 && (
+          <div className="fixed inset-0 z-50 flex flex-col bg-background">
+            <div className="relative flex-1 p-4 min-h-0 overflow-hidden">
+              <AutosamplerView motors={status.motors} fullscreen trays={trays} onTrayClick={setSelectedTray} />
+              <Button
+                variant="outline"
+                className="absolute top-4 right-4 h-10 w-10 p-0 bg-card/80 backdrop-blur-sm"
+                onClick={() => setFullscreen(false)}
+                title="Close"
+              >
+                <X className="h-5 w-5" />
+              </Button>
+              <Button
+                variant="outline"
+                className="absolute bottom-4 left-4 h-10 w-10 p-0 bg-card/80 backdrop-blur-sm"
+                onClick={() => setTrayModal(true)}
+                title="Trays"
+              >
+                <RectangleVertical className="h-5 w-5" />
+              </Button>
+              <div className="absolute bottom-4 right-4 flex gap-2">
+                <Button
+                  variant="outline"
+                  className="h-12 w-12 p-0 bg-red-950/80 border-red-500/40 hover:bg-red-900/80 backdrop-blur-sm"
+                  onClick={clearQueue}
+                  title="Emergency Stop — Clear Queue"
+                >
+                  <OctagonX className="h-6 w-6 text-red-400" />
+                </Button>
+                <Button
+                  variant="outline"
+                  className={`bg-card/80 backdrop-blur-sm transition-all duration-300 ${homing ? "h-12 px-4 gap-2" : "h-12 w-12 p-0"}`}
+                  onClick={handleHomeAll}
+                  disabled={homing}
+                  title="Home All Motors"
+                >
+                  <div className="relative h-6 w-6 shrink-0">
+                    <Home className={`h-6 w-6 absolute inset-0 transition-all duration-300 ${homing ? "opacity-0 scale-50" : "opacity-100 scale-100"}`} />
+                    <Loader2 className={`h-6 w-6 absolute inset-0 transition-all duration-300 ${homing ? "opacity-100 scale-100 animate-spin [animation-duration:2s]" : "opacity-0 scale-50"}`} />
+                  </div>
+                  <span className={`text-sm font-medium overflow-hidden transition-all duration-300 ${homing ? "max-w-24 opacity-100" : "max-w-0 opacity-0"}`}>
+                    Homing...
+                  </span>
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Tray editor card */}
+        {selectedTray !== null && trays[selectedTray] && (() => {
+          const t = trays[selectedTray];
+          const fields: { label: string; key: keyof TrayConfig; step?: number }[] = [
+            { label: "X", key: "x", step: 0.25 },
+            { label: "Y", key: "y", step: 0.25 },
+            { label: "Z", key: "z", step: 0.25 },
+            { label: "Width", key: "width", step: 0.25 },
+            { label: "Depth", key: "depth", step: 0.25 },
+            { label: "Height", key: "height", step: 0.1 },
+            { label: "Rows", key: "rows", step: 1 },
+            { label: "Cols", key: "cols", step: 1 },
+            { label: "Row Pitch", key: "rowPitch", step: 0.01 },
+            { label: "Col Pitch", key: "colPitch", step: 0.01 },
+            { label: "Slot \u00d8", key: "slotDiameter", step: 0.01 },
+            { label: "Radius", key: "radius", step: 0.05 },
+          ];
+          return (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm"
+              onClick={() => setSelectedTray(null)}>
+              <div className="w-full max-w-xs rounded-xl border border-border bg-card p-4 shadow-xl"
+                onClick={e => e.stopPropagation()}>
+                <div className="flex items-center justify-between mb-3">
+                  <h2 className="text-sm font-semibold">Tray {selectedTray + 1}</h2>
+                  <Button variant="ghost" className="h-7 w-7 p-0" onClick={() => setSelectedTray(null)}>
+                    <X className="h-4 w-4" />
+                  </Button>
+                </div>
+                <div className="grid grid-cols-2 gap-x-3 gap-y-1.5">
+                  {fields.map(({ label, key, step }) => (
+                    <label key={key} className="flex items-center gap-2 text-xs">
+                      <span className="w-16 text-muted-foreground shrink-0">{label}</span>
+                      <input
+                        type="number"
+                        step={step}
+                        value={t[key] ?? 0}
+                        onChange={e => updateTray(selectedTray, key, Number(e.target.value))}
+                        className="w-full rounded border border-border bg-background px-2 py-1 text-xs font-mono tabular-nums focus:outline-none focus:ring-1 focus:ring-primary"
+                      />
+                    </label>
+                  ))}
+                </div>
+                {(() => {
+                  const warnings: string[] = [];
+                  if (t.slotDiameter >= t.colPitch)
+                    warnings.push("Slot \u00d8 exceeds col pitch \u2014 slots overlap horizontally");
+                  if (t.slotDiameter >= t.rowPitch)
+                    warnings.push("Slot \u00d8 exceeds row pitch \u2014 slots overlap vertically");
+                  const gridW = (t.cols - 1) * t.colPitch + t.slotDiameter;
+                  const gridD = (t.rows - 1) * t.rowPitch + t.slotDiameter;
+                  if (gridW > t.width)
+                    warnings.push(`Grid width (${gridW.toFixed(2)}") exceeds tray width (${t.width}")`);
+                  if (gridD > t.depth)
+                    warnings.push(`Grid depth (${gridD.toFixed(2)}") exceeds tray depth (${t.depth}")`);
+                  if (t.slotDiameter > t.width || t.slotDiameter > t.depth)
+                    warnings.push("Slot \u00d8 exceeds tray dimensions");
+                  if (t.radius > Math.min(t.width, t.depth) / 2)
+                    warnings.push("Corner radius too large for tray size");
+                  if (t.height <= 0 || t.width <= 0 || t.depth <= 0)
+                    warnings.push("Dimensions must be positive");
+                  if (t.rows <= 0 || t.cols <= 0)
+                    warnings.push("Rows and cols must be at least 1");
+                  return warnings.length > 0 ? (
+                    <div className="mt-3 space-y-1 rounded-md border border-yellow-500/30 bg-yellow-500/5 p-2">
+                      {warnings.map((w, i) => (
+                        <div key={i} className="flex gap-1.5 text-[11px] text-yellow-400">
+                          <AlertTriangle className="h-3 w-3 shrink-0 mt-0.5" />
+                          <span>{w}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null;
+                })()}
+              </div>
+            </div>
+          );
+        })()}
       </main>
     </div>
   );

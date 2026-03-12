@@ -276,6 +276,17 @@ void app_main(void)
     init_motors(&g_as120, &i2c_bus);
     init_motor_timer();
 
+    // Home all motors on startup
+    ESP_LOGI(TAG, "Homing all motors...");
+    action_t home = { ACTION_ABSOLUTE, MOTOR_UP_DOWN, 0, 0, NULL };
+    as120_enqueue_action(&g_as120, home);
+    home.motor_idx = MOTOR_FORWARD_BACK;
+    as120_enqueue_action(&g_as120, home);
+    home.motor_idx = MOTOR_PLUNGER;
+    as120_enqueue_action(&g_as120, home);
+    home.motor_idx = MOTOR_RIGHT_LEFT;
+    as120_enqueue_action(&g_as120, home);
+
     wifi_init();
     http_server_start();
     ble_server_init();

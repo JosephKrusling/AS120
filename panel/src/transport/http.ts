@@ -166,22 +166,30 @@ export class HttpTransport implements Transport {
     };
   }
 
+  private consecutiveErrors = 0;
+  private static MAX_ERRORS = 5;
+
   private startPolling(): void {
     this.stopPolling();
+    this.consecutiveErrors = 0;
     this.pollTimer = setInterval(async () => {
       try {
         const status = await this.getStatus();
+        this.consecutiveErrors = 0;
         this.listeners.forEach((cb) => cb(status));
       } catch {
-        this._connected = false;
-        this.stopPolling();
-        this.listeners.forEach((cb) =>
-          cb({
-            version: "",
-            fault_code: -1,
-            motors: [],
-          })
-        );
+        this.consecutiveErrors++;
+        if (this.consecutiveErrors >= HttpTransport.MAX_ERRORS) {
+          this._connected = false;
+          this.stopPolling();
+          this.listeners.forEach((cb) =>
+            cb({
+              version: "",
+              fault_code: -1,
+              motors: [],
+            })
+          );
+        }
       }
     }, 200);
   }

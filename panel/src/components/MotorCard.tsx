@@ -22,6 +22,20 @@ const MOTOR_LABELS: Record<string, string> = {
   LR: "Left / Right",
 };
 
+const MOTOR_ACCENT: Record<string, string> = {
+  LR: "text-amber-400",
+  FB: "text-blue-400",
+  UD: "text-emerald-400",
+  PL: "text-purple-400",
+};
+
+const MOTOR_BORDER: Record<string, string> = {
+  LR: "border-l-amber-500/50",
+  FB: "border-l-blue-500/50",
+  UD: "border-l-emerald-500/50",
+  PL: "border-l-purple-500/50",
+};
+
 interface MotorCardProps {
   motor: MotorStatus;
 }
@@ -78,11 +92,11 @@ export function MotorCard({ motor }: MotorCardProps) {
   }, [pendingConfig, motor.index, setMotorConfig]);
 
   return (
-    <Card>
+    <Card className={`border-l-2 ${MOTOR_BORDER[motor.name] ?? ""}`}>
       <CardContent className="space-y-2 px-3 py-2">
         {/* Label, position, input, go, home — all one row */}
         <div className="flex items-center gap-1.5">
-          <span className="text-sm font-bold shrink-0 w-6">{motor.name}</span>
+          <span className={`text-sm font-bold shrink-0 w-6 ${MOTOR_ACCENT[motor.name] ?? ""}`}>{motor.name}</span>
           <span
             className={`h-2 w-2 shrink-0 rounded-full ${
               motor.is_home

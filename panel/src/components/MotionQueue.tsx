@@ -10,22 +10,22 @@ const MAX_HISTORY = 5;
 const MOTOR_BG: Record<string, string> = {
   FB: "bg-blue-500/15 border-blue-500/30",
   UD: "bg-emerald-500/15 border-emerald-500/30",
-  PL: "bg-amber-500/15 border-amber-500/30",
-  LR: "bg-purple-500/15 border-purple-500/30",
+  PL: "bg-purple-500/15 border-purple-500/30",
+  LR: "bg-amber-500/15 border-amber-500/30",
 };
 
 const MOTOR_ACCENT: Record<string, string> = {
   FB: "bg-blue-500",
   UD: "bg-emerald-500",
-  PL: "bg-amber-500",
-  LR: "bg-purple-500",
+  PL: "bg-purple-500",
+  LR: "bg-amber-500",
 };
 
 const MOTOR_TEXT: Record<string, string> = {
   FB: "text-blue-400",
   UD: "text-emerald-400",
-  PL: "text-amber-400",
-  LR: "text-purple-400",
+  PL: "text-purple-400",
+  LR: "text-amber-400",
 };
 
 /** Map full motor name to short key */
