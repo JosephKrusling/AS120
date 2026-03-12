@@ -395,6 +395,32 @@ export function AutosamplerView({ motors, fullscreen, trays = [], onTrayClick }:
   const headX = baseX + headTravel - (lrPos / lrRange) * headTravel;
   const headY = baseY + (fbPos / fbRange) * fbTravel;
 
+  // Needle collision detection: check if needle tip is at or below any surface
+  const needleTipZ = headZ - (udPos / udRange) * (7.75 * INCH) + 0.5 * INCH - 0.75 * INCH;
+  const needlePosX = headX + headW / 2;
+  const needlePosY = headY + headD - 1.75 * INCH;
+  const needleCollision = (() => {
+    let surfZ = 0;
+    for (const t of trays) {
+      const tx = t.x * INCH, tw = t.width * INCH;
+      const ty = t.y * INCH, td = t.depth * INCH;
+      const tz = ((t.z ?? 0) + t.height) * INCH;
+      if (needlePosX >= tx && needlePosX <= tx + tw && needlePosY >= ty && needlePosY <= ty + td)
+        surfZ = Math.max(surfZ, tz);
+    }
+    const legYC = baseY + (baseD - legD) / 2;
+    const llx = baseX + 5 * INCH, rlx = baseX + baseW - 5 * INCH - legW;
+    for (const lx of [llx, rlx])
+      if (needlePosX >= lx && needlePosX <= lx + legW && needlePosY >= legYC && needlePosY <= legYC + legD)
+        surfZ = Math.max(surfZ, footH + legH);
+    const lfx = llx + legW / 2 - footW / 2, rfx = rlx + legW / 2 - footW / 2;
+    const fyc = legYC + legD / 2 - footD / 2;
+    for (const fx of [lfx, rfx])
+      if (needlePosX >= fx && needlePosX <= fx + footW && needlePosY >= fyc && needlePosY <= fyc + footD)
+        surfZ = Math.max(surfZ, footH);
+    return needleTipZ <= surfZ;
+  })();
+
   // Ghost: drag target during drag, final queue target otherwise
   const queue = status?.queue ?? [];
   function finalQueueTarget(motorIdx: number, currentPos: number): number {
@@ -538,7 +564,6 @@ export function AutosamplerView({ motors, fullscreen, trays = [], onTrayClick }:
       {/* Feet and legs (drawn first, behind base) */}
       {(() => {
         const fill = "#b5bcc3";
-        const sk = "#9ca3af";
         const legYCenter = baseY + (baseD - legD) / 2;
         const leftLegX = baseX + 5 * INCH;
         const rightLegX = baseX + baseW - 5 * INCH - legW;
@@ -549,13 +574,13 @@ export function AutosamplerView({ motors, fullscreen, trays = [], onTrayClick }:
         return (
           <>
             <Foot x={leftFootX} y={footYCenter} z={0} w={footW} d={footD} h={footH}
-              fill={fill} stroke={sk} />
+              fill={fill} stroke="none" />
             <Box x={leftLegX} y={legYCenter} z={footH} w={legW} d={legD} h={legH}
-              fill={fill} stroke={sk} />
+              fill={fill} stroke="none" />
             <Foot x={rightFootX} y={footYCenter} z={0} w={footW} d={footD} h={footH}
-              fill={fill} stroke={sk} />
+              fill={fill} stroke="none" />
             <Box x={rightLegX} y={legYCenter} z={footH} w={legW} d={legD} h={legH}
-              fill={fill} stroke={sk} />
+              fill={fill} stroke="none" />
           </>
         );
       })()}
@@ -563,8 +588,6 @@ export function AutosamplerView({ motors, fullscreen, trays = [], onTrayClick }:
       {/* Base with notch cut from back-top: 3" deep, 1.5" tall */}
       {(() => {
         const fill = "#b5bcc3";
-        const sk = "#9ca3af";
-        const sw = 0.8;
         const notchD = 3 * INCH; // depth of notch from back edge
         const notchH = 1.5 * INCH; // height of notch from top
         const stepZ = baseZ + baseH - notchH; // floor of the notch
@@ -572,15 +595,15 @@ export function AutosamplerView({ motors, fullscreen, trays = [], onTrayClick }:
         const x = baseX, y = baseY, z = baseZ, w = baseW, d = baseD, h = baseH;
         return (
           <g>
-            {/* Back top face (notch floor) */}
+            {/* Back top face (notch floor — slightly darker since recessed) */}
             <polygon points={pts([iso(x, y, stepZ), iso(x + w, y, stepZ), iso(x + w, stepY, stepZ), iso(x, stepY, stepZ)])}
-              fill={fill} stroke={sk} strokeWidth={sw} strokeLinejoin="round" />
+              fill={darken(fill, 0.9)} />
             {/* Inner step wall (vertical face at stepY, facing back) */}
             <polygon points={pts([iso(x, stepY, z + h), iso(x + w, stepY, z + h), iso(x + w, stepY, stepZ), iso(x, stepY, stepZ)])}
-              fill={darken(fill, 0.7)} stroke={sk} strokeWidth={sw} strokeLinejoin="round" />
+              fill={darken(fill, 0.7)} />
             {/* Front top face */}
             <polygon points={pts([iso(x, stepY, z + h), iso(x + w, stepY, z + h), iso(x + w, y + d, z + h), iso(x, y + d, z + h)])}
-              fill={fill} stroke={sk} strokeWidth={sw} strokeLinejoin="round" />
+              fill={fill} />
             {/* Right face (L-shaped) */}
             <polygon points={pts([
               iso(x + w, y, stepZ),
@@ -590,10 +613,10 @@ export function AutosamplerView({ motors, fullscreen, trays = [], onTrayClick }:
               iso(x + w, y + d, z),
               iso(x + w, y, z),
             ])}
-              fill="#266eba" stroke={sk} strokeWidth={sw} strokeLinejoin="round" />
+              fill="#266eba" />
             {/* Front face */}
             <polygon points={pts([iso(x, y + d, z + h), iso(x + w, y + d, z + h), iso(x + w, y + d, z), iso(x, y + d, z)])}
-              fill={darken(fill, 0.62)} stroke={sk} strokeWidth={sw} strokeLinejoin="round" />
+              fill={darken(fill, 0.62)} />
           </g>
         );
       })()}
@@ -651,8 +674,9 @@ export function AutosamplerView({ motors, fullscreen, trays = [], onTrayClick }:
         // Find what the laser hits: trays, legs, or feet
         const activeLR = dragPos ? dragPos.lr : lrPos;
         const activeFB = dragPos ? dragPos.fb : fbPos;
+        // Match syringe needle center: cylCX = headX + headW/2, cylCY = headY + headD - 1.75"
         const needleX = baseX + headW / 2 + headTravel * (1 - activeLR / lrRange);
-        const needleY = baseY + headD + (activeFB / fbRange) * fbTravel - 2 * INCH;
+        const needleY = baseY + headD + (activeFB / fbRange) * fbTravel - 1.75 * INCH;
         let hitZ = 0, hitIdx = -1;
         // Check trays
         for (let i = 0; i < sorted.length; i++) {
@@ -682,19 +706,19 @@ export function AutosamplerView({ motors, fullscreen, trays = [], onTrayClick }:
           }
         }
 
-        const laserEl = (
+        const laserEl = needleCollision ? null : (
           <g pointerEvents="none">
             {(() => {
-              const [, topSY] = iso(needleX, needleY, headZ);
+              const [, topSY] = iso(needleX, needleY, needleTipZ);
               const [hx, hy] = iso(needleX, needleY, hitZ);
               return (
                 <>
                   <line x1={hx} y1={topSY} x2={hx} y2={hy}
-                    stroke="#ef4444" strokeWidth={6} strokeOpacity={0.08} />
+                    stroke="#ef4444" strokeWidth={10} strokeOpacity={0.08} />
                   <line x1={hx} y1={topSY} x2={hx} y2={hy}
-                    stroke="#ef4444" strokeWidth={2.5} strokeOpacity={0.15} />
+                    stroke="#ef4444" strokeWidth={4} strokeOpacity={0.15} />
                   <line x1={hx} y1={topSY} x2={hx} y2={hy}
-                    stroke="#f87171" strokeWidth={1} strokeOpacity={0.8} />
+                    stroke="#f87171" strokeWidth={1.5} strokeOpacity={0.8} />
                   <circle cx={hx} cy={hy} r={4} fill="#ef4444" fillOpacity={0.15} />
                   <circle cx={hx} cy={hy} r={2} fill="#f87171" fillOpacity={0.4} />
                   <circle cx={hx} cy={hy} r={0.8} fill="#fecaca" />
@@ -776,6 +800,17 @@ export function AutosamplerView({ motors, fullscreen, trays = [], onTrayClick }:
       {/* Draggable head assembly (LR + FB via pointer drag) */}
       <g style={{ cursor: "grab", userSelect: "none", WebkitUserSelect: "none" } as React.CSSProperties}
         onPointerDown={handlePointerDown}>
+      {/* Left interior wall (rendered before UD slider so slider draws on top) */}
+      {(() => {
+        const fill = "#b5bcc3";
+        const x = headX, y = headY, z = headZ;
+        const fy = y + headD;
+        const winH = 3.75 * INCH, winZ = z + 0.5 * INCH;
+        return (
+          <polygon points={pts([iso(x, y, winZ + winH), iso(x, fy, winZ + winH), iso(x, fy, z), iso(x, y, z)])}
+            fill={darken(fill, 0.9)} />
+        );
+      })()}
       {/* UD slider (drawn before head so head renders on top where they overlap) */}
       {(() => {
         const udW = 1.5 * INCH;
@@ -801,7 +836,7 @@ export function AutosamplerView({ motors, fullscreen, trays = [], onTrayClick }:
         const cylZ = mtrZ - cylH; // extends downward from motor bottom
         const cylN = 10;
 
-        // Plunger tip below cylinder
+        // Plunger holder block below cylinder
         const tipW = 1 * INCH;
         const tipD = 0.75 * INCH;
         const tipH = 0.6 * INCH;
@@ -809,15 +844,135 @@ export function AutosamplerView({ motors, fullscreen, trays = [], onTrayClick }:
         const tipY = udY + udD; // back face coplanar with slider front
         const tipZ = cylZ - tipH; // top edge = bottom of cylinder
 
+        // Syringe barrel (fixed to UD slider)
+        // Top = bottom of plunger holder block at max extension, bottom = UD slider bottom + 0.5"
+        const barrelR = 0.3 * INCH; // 0.6" diameter
+        const barrelTopZ = mtrZ - cylMaxH - tipH; // plunger holder block bottom at max extension
+        const barrelZ = udZ + 0.5 * INCH; // 1/2" above UD slider bottom
+        const barrelH = barrelTopZ - barrelZ;
+        const barrelN = 12;
+        // Needle below barrel
+        const needleR = 0.03 * INCH;
+        const needleH = 0.75 * INCH;
+        const needleZ = barrelZ - needleH;
+        const needleN = 6;
+
         return (
           <g>
             <Box x={udX} y={udY} z={udZ} w={udW} d={udD} h={udH}
-              fill="#8a9199" stroke="#6b7280" />
+              fill={needleCollision ? "#c98a8a" : "#8a9199"} stroke={needleCollision ? "#b06060" : "#6b7280"} />
+            {/* Plunger (stem + gasket inside barrel) */}
+            {(() => {
+              const gasketH = 0.15 * INCH;
+              const gasketR = barrelR - 0.02 * INCH;
+              const stemR = 0.06 * INCH;
+              const gasketBottomZ = barrelZ + (1 - syringePos / plRange) * (barrelH - gasketH);
+              const gasketTopZ = gasketBottomZ + gasketH;
+              const stemTopZ = tipZ;
+              const stemBottomZ = gasketTopZ;
+              const stemN = 8;
+              const gasketN = 12;
+              const stemStrips = stemTopZ > stemBottomZ ? Array.from({ length: stemN }, (_, i) => {
+                const θ1 = (Math.PI * i) / stemN;
+                const θ2 = (Math.PI * (i + 1)) / stemN;
+                const x1 = cylCX + stemR * Math.cos(θ1), y1 = cylCY + stemR * Math.sin(θ1);
+                const x2 = cylCX + stemR * Math.cos(θ2), y2 = cylCY + stemR * Math.sin(θ2);
+                const shade = 0.85 - 0.25 * Math.sin((θ1 + θ2) / 2);
+                return (
+                  <polygon key={`pstem${i}`}
+                    points={pts([iso(x1, y1, stemTopZ), iso(x2, y2, stemTopZ), iso(x2, y2, stemBottomZ), iso(x1, y1, stemBottomZ)])}
+                    fill={darken("#a0a0a0", shade)} stroke="none" />
+                );
+              }) : [];
+              const gFill = "#222222";
+              const gStrips = Array.from({ length: gasketN }, (_, i) => {
+                const θ1 = (Math.PI * i) / gasketN;
+                const θ2 = (Math.PI * (i + 1)) / gasketN;
+                const x1 = cylCX + gasketR * Math.cos(θ1), y1 = cylCY + gasketR * Math.sin(θ1);
+                const x2 = cylCX + gasketR * Math.cos(θ2), y2 = cylCY + gasketR * Math.sin(θ2);
+                const shade = 0.9 - 0.2 * Math.sin((θ1 + θ2) / 2);
+                return (
+                  <polygon key={`pgask${i}`}
+                    points={pts([iso(x1, y1, gasketTopZ), iso(x2, y2, gasketTopZ), iso(x2, y2, gasketBottomZ), iso(x1, y1, gasketBottomZ)])}
+                    fill={darken(gFill, shade)} stroke="none" />
+                );
+              });
+              const gTopPts: [number, number][] = [];
+              const gBotPts: [number, number][] = [];
+              for (let i = 0; i <= gasketN * 2; i++) {
+                const θ = (Math.PI * 2 * i) / (gasketN * 2);
+                const bx = cylCX + gasketR * Math.cos(θ), by = cylCY + gasketR * Math.sin(θ);
+                gTopPts.push(iso(bx, by, gasketTopZ));
+                gBotPts.push(iso(bx, by, gasketBottomZ));
+              }
+              return (
+                <g>
+                  <polygon points={pts(gBotPts)} fill={darken(gFill, 0.7)} stroke="none" />
+                  {gStrips}
+                  <polygon points={pts(gTopPts)} fill={darken(gFill, 1.1)} stroke="none" />
+                  {stemStrips}
+                </g>
+              );
+            })()}
+            {/* Syringe barrel (glass cylinder) */}
+            {(() => {
+              const bFill = "#d4dce6";
+              const strips = Array.from({ length: barrelN }, (_, i) => {
+                const θ1 = (Math.PI * i) / barrelN;
+                const θ2 = (Math.PI * (i + 1)) / barrelN;
+                const x1 = cylCX + barrelR * Math.cos(θ1);
+                const y1 = cylCY + barrelR * Math.sin(θ1);
+                const x2 = cylCX + barrelR * Math.cos(θ2);
+                const y2 = cylCY + barrelR * Math.sin(θ2);
+                const midθ = (θ1 + θ2) / 2;
+                const shade = 0.9 - 0.2 * Math.sin(midθ);
+                return (
+                  <polygon key={`bar${i}`}
+                    points={pts([iso(x1, y1, barrelZ + barrelH), iso(x2, y2, barrelZ + barrelH), iso(x2, y2, barrelZ), iso(x1, y1, barrelZ)])}
+                    fill={darken(bFill, shade)} fillOpacity={0.7} stroke="none" />
+                );
+              });
+              const topPts: [number, number][] = [];
+              const botPts: [number, number][] = [];
+              for (let i = 0; i <= barrelN * 2; i++) {
+                const θ = (Math.PI * 2 * i) / (barrelN * 2);
+                const bx = cylCX + barrelR * Math.cos(θ), by = cylCY + barrelR * Math.sin(θ);
+                topPts.push(iso(bx, by, barrelZ + barrelH));
+                botPts.push(iso(bx, by, barrelZ));
+              }
+              return (
+                <g>
+                  <polygon points={pts(botPts)} fill={darken(bFill, 0.7)} fillOpacity={0.5} stroke="none" />
+                  {strips}
+                  <polygon points={pts(topPts)} fill={bFill} fillOpacity={0.5} stroke="none" />
+                </g>
+              );
+            })()}
             <Box x={tipX} y={tipY} z={tipZ} w={tipW} d={tipD} h={tipH}
               fill="#1a1a1a" stroke="#333" />
+            {/* Needle */}
+            {(() => {
+              const nFill = "#b0b8c0";
+              const strips = Array.from({ length: needleN }, (_, i) => {
+                const θ1 = (Math.PI * i) / needleN;
+                const θ2 = (Math.PI * (i + 1)) / needleN;
+                const x1 = cylCX + needleR * Math.cos(θ1);
+                const y1 = cylCY + needleR * Math.sin(θ1);
+                const x2 = cylCX + needleR * Math.cos(θ2);
+                const y2 = cylCY + needleR * Math.sin(θ2);
+                const midθ = (θ1 + θ2) / 2;
+                const shade = 0.9 - 0.3 * Math.sin(midθ);
+                return (
+                  <polygon key={`ndl${i}`}
+                    points={pts([iso(x1, y1, barrelZ), iso(x2, y2, barrelZ), iso(x2, y2, needleZ), iso(x1, y1, needleZ)])}
+                    fill={darken(nFill, shade)} stroke="none" />
+                );
+              });
+              return <g>{strips}</g>;
+            })()}
+            {/* Plunger threaded axle */}
             {cylH > 0 && (() => {
               const cylFill = "#c0c0c0";
-              // Cylinder surface strips (front half visible)
               const strips = Array.from({ length: cylN }, (_, i) => {
                 const θ1 = (Math.PI * i) / cylN;
                 const θ2 = (Math.PI * (i + 1)) / cylN;
@@ -833,7 +988,6 @@ export function AutosamplerView({ motors, fullscreen, trays = [], onTrayClick }:
                     fill={darken(cylFill, shade)} stroke="none" />
                 );
               });
-              // Top ellipse
               const topPts: [number, number][] = [];
               for (let i = 0; i <= cylN * 2; i++) {
                 const θ = (Math.PI * 2 * i) / (cylN * 2);
@@ -855,8 +1009,6 @@ export function AutosamplerView({ motors, fullscreen, trays = [], onTrayClick }:
       {/* Head: lower box + upper tower, front-aligned */}
       {(() => {
         const fill = "#b5bcc3";
-        const sk = "#9ca3af";
-        const sw = 0.8;
         const x = headX, y = headY, w = headW, d = headD, z = headZ, h = headH;
         const towerD = 4.5 * INCH;
         const towerH = 8 * INCH;
@@ -866,13 +1018,13 @@ export function AutosamplerView({ motors, fullscreen, trays = [], onTrayClick }:
           <g>
             {/* Back top face (top of lower part, exposed) */}
             <polygon points={pts([iso(x, y, z + h), iso(x + w, y, z + h), iso(x + w, towerY, z + h), iso(x, towerY, z + h)])}
-              fill={fill} stroke={sk} strokeWidth={sw} strokeLinejoin="round" />
+              fill={fill} />
             {/* Inner step wall */}
             <polygon points={pts([iso(x, towerY, towerTopZ), iso(x + w, towerY, towerTopZ), iso(x + w, towerY, z + h), iso(x, towerY, z + h)])}
-              fill={darken(fill, 0.7)} stroke={sk} strokeWidth={sw} strokeLinejoin="round" />
+              fill={darken(fill, 0.7)} />
             {/* Upper top face */}
             <polygon points={pts([iso(x, towerY, towerTopZ), iso(x + w, towerY, towerTopZ), iso(x + w, y + d, towerTopZ), iso(x, y + d, towerTopZ)])}
-              fill={fill} stroke={sk} strokeWidth={sw} strokeLinejoin="round" />
+              fill={fill} />
             {/* Windows: 1.5" wide, 3.25" tall, 1" above head bottom, flush right + front */}
             {(() => {
               const winW = 1.5 * INCH;
@@ -906,21 +1058,21 @@ export function AutosamplerView({ motors, fullscreen, trays = [], onTrayClick }:
 
               return (
                 <>
-                  {/* Right face with cutout */}
+                  {/* Right face with cutout (no stroke — front face covers shared edge) */}
                   <path d={pathD(rightOuter) + " " + pathD(rightHole)}
-                    fillRule="evenodd" fill={darken(fill, 0.78)}
-                    stroke={sk} strokeWidth={sw} strokeLinejoin="round" />
-                  {/* Front face with cutout */}
+                    fillRule="evenodd" fill={darken(fill, 0.78)} />
+                  {/* Front face with cutout (no stroke — glass border defines window edge) */}
                   <path d={pathD(frontOuter) + " " + pathD(frontHole)}
-                    fillRule="evenodd" fill={darken(fill, 0.62)}
-                    stroke={sk} strokeWidth={sw} strokeLinejoin="round" />
-                  {/* Glass overlays */}
-                  <polygon points={pts(frontHole)}
-                    fill="#1a3a5c" fillOpacity={0.3}
-                    stroke="#4a7a9c" strokeWidth={0.6} strokeLinejoin="round" />
-                  <polygon points={pts(rightHole)}
-                    fill="#1a3a5c" fillOpacity={0.2}
-                    stroke="#4a7a9c" strokeWidth={0.6} strokeLinejoin="round" />
+                    fillRule="evenodd" fill={darken(fill, 0.62)} />
+                  {/* Glass — single continuous path wrapping the corner */}
+                  <polygon points={pts([
+                    iso(x + w, winY, winZ + winH),
+                    iso(x + w, fy, winZ + winH),
+                    iso(winX, fy, winZ + winH),
+                    iso(winX, fy, winZ),
+                    iso(x + w, fy, winZ),
+                    iso(x + w, winY, winZ),
+                  ])} fill="#1a3a5c" fillOpacity={0.25} stroke="#4a7a9c" strokeWidth={0.6} strokeLinejoin="round" />
                 </>
               );
             })()}
